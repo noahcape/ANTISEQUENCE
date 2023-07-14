@@ -20,6 +20,9 @@ use revcomp_reads::*;
 pub mod pad_reads;
 use pad_reads::*;
 
+pub mod truncate_reads;
+use truncate_reads::*;
+
 pub mod collect_fastq_reads;
 use collect_fastq_reads::*;
 
@@ -177,6 +180,9 @@ pub trait Reads: Send + Sync {
         LengthInBoundsReads::new(self, selector_expr, transform_expr, bounds)
     }
 
+    /// Pad mappings corresponding labels to specific length
+    /// 
+    /// Use `max_length: EndIdx` to specify the length and end of read to pad from
     #[must_use]
     fn pad(
         self,
@@ -189,6 +195,22 @@ pub trait Reads: Send + Sync {
         Self: Sized,
     {
         PadReads::new(self, selector_expr, labels.into(), max_length, pad_char)
+    }
+
+    /// Truncate mappings corresponding labels to specific length
+    /// 
+    /// Use `max_length: EndIdx` to specify the length and end of read to truncate from
+    #[must_use]
+    fn trunc(
+        self,
+        selector_expr: SelectorExpr,
+        labels: impl Into<Vec<Label>>,
+        max_length: EndIdx,
+    ) -> TruncateReads<Self>
+    where
+        Self: Sized,
+    {
+        TruncateReads::new(self, selector_expr, labels.into(), max_length)
     }
 
     /// Set mappings corresponding labels to their reverse complement
