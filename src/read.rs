@@ -1,11 +1,14 @@
+use needletail::bitkmer::BitNuclKmer;
 use rustc_hash::FxHashMap;
 
 use std::fmt;
 use std::sync::Arc;
 
 use crate::errors::{self, Name, NameError};
+use crate::expr::Attr;
 use crate::fastq::Origin;
 use crate::inline_string::*;
+use crate::map_reads::*;
 use crate::normalize_reads::*;
 use crate::revcomp_reads::COMPLEMENT;
 
@@ -412,6 +415,114 @@ impl StrMappings {
             .collect::<Vec<u8>>();
 
         self.string.splice(range, revcomp.clone());
+
+        Ok(())
+    }
+
+    pub fn map(
+        &mut self,
+        label: InlineString,
+        attr: Attr,
+        seq_map: &'static str,
+        mismatch: usize,
+    ) -> Result<(), NameError> {
+        // this query is a random kmer
+        let query = self
+            .mapping(label)
+            .ok_or_else(|| NameError::NotInRead(Name::Label(label)))?
+            .clone();
+
+        let threshold = mismatch + 1;
+
+        let k = query.len / threshold;
+
+        let (seq_map, kmer_map) = generate_maps(seq_map, k);
+
+        let mut matches: Vec<u64> = Vec::new();
+
+        if let Some((_, (query_bits, _), _)) = BitNuclKmer::new(
+            &self.string[query.start..query.len + query.start],
+            query.len as u8,
+            false,
+        )
+        .next()
+        {
+            if mismatch == 0 {
+                if let Some(_) = seq_map.get(&query_bits) {
+                    matches.push(query_bits)
+                }
+            } else {
+                let mut query_kmers: Vec<u64> = Vec::new();
+
+                for i in 0..query.len - k {
+                    if let Some((_, (kmer, _), _)) =
+                        BitNuclKmer::new(&self.string[i..i + k], k as u8, false).next()
+                    {
+                        query_kmers.push(kmer)
+                    }
+                }
+
+                for (target, kmers) in kmer_map {
+                    let intersection: Vec<u64> = kmers
+                        .into_iter()
+                        .filter(|e| query_kmers.contains(e))
+                        .collect();
+
+                    if intersection.len() >= threshold
+                        && edit_distance(
+                            target,
+                            // make the length a multiple of eight
+                            (((u64::BITS - target.leading_zeros()) + 7 & !7) / 2)
+                                .try_into()
+                                .unwrap(),
+                            query_bits,
+                            query.len,
+                        ) <= mismatch
+                    {
+                        matches.push(target)
+                    }
+                }
+            }
+        }
+        // downstream handle the many allowable matches
+
+        // replace the matched sequence with others
+        if !matches.is_empty() {
+            println!("{}", matches.len());
+            let rep_seq = seq_map.get(matches.first().unwrap()).unwrap();
+
+            let len_dif = query.len as i32 - rep_seq.len() as i32;
+
+            self.mappings.iter_mut().for_each(|m| {
+                use ExtendInterval::*;
+                match query.extend_direction(m) {
+                    Start => {
+                        if len_dif < 0 {
+                            m.start -= len_dif as usize
+                        } else {
+                            m.start += len_dif as usize
+                        }
+                    }
+                    End => {
+                        if len_dif < 0 {
+                            m.len -= len_dif as usize
+                        } else {
+                            m.len += len_dif as usize
+                        }
+                    }
+                    Leave => (),
+                }
+            });
+
+            // do something about the change
+            self.string.splice(
+                query.start..query.start + query.len,
+                rep_seq.as_bytes().to_vec(),
+            );
+        }
+
+        // set the attribute
+        *self.data_mut(attr.label, attr.attr).unwrap() = Data::Bool(!matches.is_empty());
 
         Ok(())
     }
@@ -906,6 +1017,19 @@ impl Read {
         self.str_mappings_mut(str_type)
             .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?
             .revcomp(label)
+    }
+
+    pub fn map(
+        &mut self,
+        str_type: StrType,
+        label: InlineString,
+        attr: Attr,
+        seq_map: &'static str,
+        mismatch: usize,
+    ) -> Result<(), NameError> {
+        self.str_mappings_mut(str_type)
+            .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?
+            .map(label, attr, seq_map, mismatch)
     }
 
     pub fn first_idx(&self) -> usize {

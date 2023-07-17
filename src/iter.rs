@@ -11,6 +11,8 @@ use crate::read::*;
 pub mod trim_reads;
 use trim_reads::*;
 
+pub mod map_reads;
+
 pub mod reverse_reads;
 use reverse_reads::*;
 
@@ -180,8 +182,22 @@ pub trait Reads: Send + Sync {
         LengthInBoundsReads::new(self, selector_expr, transform_expr, bounds)
     }
 
+    #[must_use]
+    fn map(
+        self,
+        selector_expr: SelectorExpr,
+        transform_expr: TransformExpr,
+        seq_map: &'static str,
+        mismatch: usize,
+    ) -> MapReads<Self>
+    where
+        Self: Sized,
+    {
+        MapReads::new(self, selector_expr, transform_expr, seq_map, mismatch)
+    }
+
     /// Pad mappings corresponding labels to specific length
-    /// 
+    ///
     /// Use `max_length: EndIdx` to specify the length and end of read to pad from
     #[must_use]
     fn pad(
@@ -198,7 +214,7 @@ pub trait Reads: Send + Sync {
     }
 
     /// Truncate mappings corresponding labels to specific length
-    /// 
+    ///
     /// Use `max_length: EndIdx` to specify the length and end of read to truncate from
     #[must_use]
     fn trunc(
@@ -721,6 +737,8 @@ impl<R: Reads + ?Sized> Reads for Box<R> {
 
 pub use MatchType::*;
 pub use Threshold::*;
+
+use self::map_reads::MapReads;
 
 /// Algorithm types for matching patterns.
 ///

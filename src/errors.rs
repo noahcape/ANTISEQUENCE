@@ -65,6 +65,8 @@ pub enum NameError {
     TypeExplicit(&'static str, &'static str),
     #[error("Condition: {0} unsatisfied, found: {1}, expected {2}: {3}")]
     ConditionUnsatisfied(&'static str, Data, &'static str, Data),
+    #[error("{0}")]
+    Custom(&'static str)
 }
 
 #[derive(Debug)]
