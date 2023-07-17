@@ -9,7 +9,7 @@ pub struct MapReads<R: Reads> {
     selector_expr: SelectorExpr,
     label: Label,
     attr: Option<Attr>,
-    seq_map: &'static str,
+    seq_map: String,
     mismatch: usize,
 }
 
@@ -20,15 +20,15 @@ struct BCMapRecord {
 }
 
 pub fn generate_maps(
-    seq_map: &'static str,
+    seq_map: String,
     k: usize,
 ) -> (HashMap<u64, String>, HashMap<u64, Vec<u64>>) {
     let mut rdr = csv::ReaderBuilder::new()
         .delimiter(b'\t')
         .comment(Some(b'#'))
         .has_headers(false)
-        .from_path(seq_map)
-        .expect(format!("Could not open file {seq_map}").as_str()); // create a custom error for this
+        .from_path(seq_map.clone())
+        .expect(format!("Could not open file {}", seq_map).as_str()); // create a custom error for this
 
     let mut hm = HashMap::new();
     let mut kmer_hm = HashMap::new();
@@ -89,7 +89,7 @@ impl<R: Reads> MapReads<R> {
         reads: R,
         selector_expr: SelectorExpr,
         transform_expr: TransformExpr,
-        seq_map: &'static str,
+        seq_map: String,
         mismatch: usize,
     ) -> Self {
         transform_expr.check_size(1, 1, "checking length in bounds");
@@ -131,7 +131,7 @@ impl<R: Reads> Reads for MapReads<R> {
                     self.label.str_type,
                     self.label.label,
                     attr.clone(),
-                    self.seq_map,
+                    self.seq_map.clone(),
                     self.mismatch,
                 )
                 .map_err(|e| Error::NameError {

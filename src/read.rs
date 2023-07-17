@@ -423,7 +423,7 @@ impl StrMappings {
         &mut self,
         label: InlineString,
         attr: Attr,
-        seq_map: &'static str,
+        seq_map: String,
         mismatch: usize,
     ) -> Result<(), NameError> {
         // this query is a random kmer
@@ -1024,7 +1024,7 @@ impl Read {
         str_type: StrType,
         label: InlineString,
         attr: Attr,
-        seq_map: &'static str,
+        seq_map: String,
         mismatch: usize,
     ) -> Result<(), NameError> {
         self.str_mappings_mut(str_type)

@@ -7,7 +7,7 @@ fn main() {
         .map(
             sel!(),
             tr!(seq1.* -> seq1.*.mapped),
-            "example_data/bc_map.txt",
+            String::from("example_data/bc_map.txt"),
             1,
         )
         .pad(sel!(!seq1.*.mapped), [label!(seq1.*)], RightEnd(10), b'0')
