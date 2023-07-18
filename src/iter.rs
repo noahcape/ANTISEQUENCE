@@ -1,6 +1,5 @@
 use std::marker::{Send, Sync};
 use std::ops::RangeBounds;
-use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 

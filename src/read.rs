@@ -434,7 +434,7 @@ impl StrMappings {
 
         let threshold = mismatch + 1;
 
-        let k = query.len / threshold;
+        let k = (query.len as f64 / threshold as f64).ceil() as usize;
 
         let (seq_map, kmer_map) = generate_maps(seq_map, k);
 
@@ -488,7 +488,6 @@ impl StrMappings {
 
         // replace the matched sequence with others
         if !matches.is_empty() {
-            println!("{}", matches.len());
             let rep_seq = seq_map.get(matches.first().unwrap()).unwrap();
 
             let len_dif = query.len as i32 - rep_seq.len() as i32;
