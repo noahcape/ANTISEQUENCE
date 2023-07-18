@@ -4,7 +4,7 @@ pub struct TruncateReads<R: Reads> {
     reads: R,
     selector_expr: SelectorExpr,
     labels: Vec<Label>,
-    max_length: EndIdx,
+    by_length: EndIdx,
 }
 
 impl<R: Reads> TruncateReads<R> {
@@ -12,13 +12,13 @@ impl<R: Reads> TruncateReads<R> {
         reads: R,
         selector_expr: SelectorExpr,
         labels: Vec<Label>,
-        max_length: EndIdx,
+        by_length: EndIdx,
     ) -> Self {
         Self {
             reads,
             selector_expr,
             labels,
-            max_length,
+            by_length,
         }
     }
 }
@@ -42,7 +42,7 @@ impl<R: Reads> Reads for TruncateReads<R> {
 
             self.labels
                 .iter()
-                .try_for_each(|l| read.truncate(l.str_type, l.label, self.max_length))
+                .try_for_each(|l| read.truncate(l.str_type, l.label, self.by_length))
                 .map_err(|e| Error::NameError {
                     source: e,
                     read: read.clone(),

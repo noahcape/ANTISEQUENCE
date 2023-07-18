@@ -288,7 +288,7 @@ impl StrMappings {
     pub fn pad(
         &mut self,
         label: InlineString,
-        max_length: EndIdx,
+        by_length: EndIdx,
         pad_char: u8,
     ) -> Result<(), NameError> {
         let padded = self
@@ -296,34 +296,22 @@ impl StrMappings {
             .ok_or_else(|| NameError::NotInRead(Name::Label(label)))?
             .clone();
 
-        let pad_length = match max_length {
+        let pad_length = match by_length {
             LeftEnd(n) => n,
             RightEnd(n) => n,
         };
 
-        if pad_length < padded.len {
-            // name error not really the correct way to do this
-            return Err(NameError::ConditionUnsatisfied(
-                "padding length",
-                Data::UInt(pad_length),
-                "at least",
-                Data::UInt(padded.len),
-            ));
-        }
-
-        let padding_len = pad_length - padded.len;
-
         self.mappings.iter_mut().for_each(|m| {
             use ExtendInterval::*;
             match padded.extend_direction(m) {
-                Start => m.start += padding_len,
-                End => m.len += padding_len,
+                Start => m.start += pad_length,
+                End => m.len += pad_length,
                 Leave => (),
             }
         });
 
-        for _ in 0..padding_len {
-            let insert_idx = match max_length {
+        for _ in 0..pad_length {
+            let insert_idx = match by_length {
                 LeftEnd(_) => padded.start,
                 RightEnd(_) => padded.start + padded.len,
             };
@@ -332,8 +320,8 @@ impl StrMappings {
         }
 
         if let Some(qual) = &mut self.qual {
-            for _ in 0..padding_len {
-                let insert_idx = match max_length {
+            for _ in 0..pad_length {
+                let insert_idx = match by_length {
                     LeftEnd(_) => padded.start,
                     RightEnd(_) => padded.start + padded.len,
                 };
@@ -345,40 +333,29 @@ impl StrMappings {
         Ok(())
     }
 
-    pub fn truncate(&mut self, label: InlineString, max_length: EndIdx) -> Result<(), NameError> {
+    pub fn truncate(&mut self, label: InlineString, by_length: EndIdx) -> Result<(), NameError> {
         let truncated = self
             .mapping(label)
             .ok_or_else(|| NameError::NotInRead(Name::Label(label)))?
             .clone();
 
-        let trunc_len = match max_length {
+        let trunc_len = match by_length {
             LeftEnd(n) => n,
             RightEnd(n) => n,
         };
-
-        if trunc_len > truncated.len {
-            return Err(NameError::ConditionUnsatisfied(
-                "truncate length",
-                Data::UInt(trunc_len),
-                "at most",
-                Data::UInt(truncated.len),
-            ));
-        }
-
-        let truncating_len = truncated.len - trunc_len;
 
         self.mappings.iter_mut().for_each(|m| {
             use ExtendInterval::*;
             // note subtraction so in practice reverse extending
             match truncated.extend_direction(m) {
-                Start => m.start -= truncating_len,
-                End => m.len -= truncating_len,
+                Start => m.start -= trunc_len,
+                End => m.len -= trunc_len,
                 Leave => (),
             }
         });
 
-        for _ in 0..truncating_len {
-            let insert_idx = match max_length {
+        for _ in 0..trunc_len {
+            let insert_idx = match by_length {
                 LeftEnd(_) => truncated.start,
                 RightEnd(_) => truncated.start + truncated.len,
             };
@@ -387,8 +364,8 @@ impl StrMappings {
         }
 
         if let Some(qual) = &mut self.qual {
-            for _ in 0..truncating_len {
-                let insert_idx = match max_length {
+            for _ in 0..trunc_len {
+                let insert_idx = match by_length {
                     LeftEnd(_) => truncated.start,
                     RightEnd(_) => truncated.start + truncated.len,
                 };
@@ -993,23 +970,23 @@ impl Read {
         &mut self,
         str_type: StrType,
         label: InlineString,
-        max_length: EndIdx,
+        by_length: EndIdx,
         pad_char: u8,
     ) -> Result<(), NameError> {
         self.str_mappings_mut(str_type)
             .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?
-            .pad(label, max_length, pad_char)
+            .pad(label, by_length, pad_char)
     }
 
     pub fn truncate(
         &mut self,
         str_type: StrType,
         label: InlineString,
-        max_length: EndIdx,
+        by_length: EndIdx,
     ) -> Result<(), NameError> {
         self.str_mappings_mut(str_type)
             .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?
-            .truncate(label, max_length)
+            .truncate(label, by_length)
     }
 
     pub fn revcomp(&mut self, str_type: StrType, label: InlineString) -> Result<(), NameError> {
