@@ -474,25 +474,40 @@ impl StrMappings {
                 match query.extend_direction(m) {
                     Start => {
                         if len_dif < 0 {
-                            m.start -= len_dif as usize
+                            m.start += (len_dif * -1) as usize
                         } else {
-                            m.start += len_dif as usize
+                            m.start -= len_dif as usize
                         }
                     }
                     End => {
                         if len_dif < 0 {
-                            m.len -= len_dif as usize
+                            m.len += (len_dif * -1) as usize
                         } else {
-                            m.len += len_dif as usize
+                            m.len -= len_dif as usize
                         }
                     }
                     Leave => (),
                 }
             });
 
-            // do something about the change
+            if len_dif < 0 {
+                for _ in 0..(len_dif*-1) {
+                    self.string.insert(query.start, b'A');
+                    if let Some(qual) = &mut self.qual {
+                        qual.insert(query.start, b'#')
+                    }
+                }
+            } else {
+                for _ in 0..(len_dif*-1) {
+                    self.string.remove(query.start);
+                    if let Some(qual) = &mut self.qual {
+                        qual.insert(query.start, b'#')
+                    }
+                }
+            }
+
             self.string.splice(
-                query.start..query.start + query.len,
+                query.start..query.start + rep_seq.len(),
                 rep_seq.as_bytes().to_vec(),
             );
         }
