@@ -513,7 +513,7 @@ impl StrMappings {
         }
 
         // set the attribute
-        *self.data_mut(attr.label, attr.attr).unwrap() = Data::Bool(!matches.is_empty());
+        *self.data_mut(attr.label, attr.attr).unwrap() = Data::Bool(matches.is_empty());
 
         Ok(())
     }
