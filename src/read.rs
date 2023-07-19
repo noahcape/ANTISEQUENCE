@@ -413,7 +413,7 @@ impl StrMappings {
 
         let k = (query.len as f64 / threshold as f64).ceil() as usize;
 
-        let (seq_map, kmer_map) = generate_maps(seq_map, k);
+        let (seq_map, kmer_map) = generate_maps(seq_map, k, mismatch != 0);
 
         let mut matches: Vec<u64> = Vec::new();
 

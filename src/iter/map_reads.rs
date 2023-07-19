@@ -22,6 +22,7 @@ struct BCMapRecord {
 pub fn generate_maps(
     seq_map: String,
     k: usize,
+    kmer_map: bool,
 ) -> (HashMap<u64, String>, HashMap<u64, Vec<u64>>) {
     let mut rdr = csv::ReaderBuilder::new()
         .delimiter(b'\t')
@@ -45,15 +46,18 @@ pub fn generate_maps(
         )
         .next()
         {
-            for i in 0..record.rand_hex.len() - k {
-                if let Some((_, (kmer, _), _)) =
-                    BitNuclKmer::new(record.rand_hex[i..i + k].as_bytes(), k as u8, false).next()
-                {
-                    kmers.push(kmer)
+            if kmer_map {
+                for i in 0..record.rand_hex.len() - k {
+                    if let Some((_, (kmer, _), _)) =
+                        BitNuclKmer::new(record.rand_hex[i..i + k].as_bytes(), k as u8, false).next()
+                    {
+                        kmers.push(kmer)
+                    }
                 }
+    
+                kmer_hm.insert(rh, kmers);
             }
-
-            kmer_hm.insert(rh, kmers);
+        
             hm.insert(rh, record.oligo_dt.clone());
         }
     }

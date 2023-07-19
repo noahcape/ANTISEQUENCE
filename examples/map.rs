@@ -8,7 +8,7 @@ fn main() {
             sel!(),
             tr!(seq1.* -> seq1.*.mapped),
             String::from("example_data/bc_map.txt"),
-            1,
+            0,
         )
         .pad(sel!(!seq1.*.mapped), [label!(seq1.*)], RightEnd(10), b'0')
         .dbg(sel!())
