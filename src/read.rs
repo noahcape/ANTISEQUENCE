@@ -1,6 +1,7 @@
 use needletail::bitkmer::BitNuclKmer;
 use rustc_hash::FxHashMap;
 
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -400,7 +401,7 @@ impl StrMappings {
         &mut self,
         label: InlineString,
         attr: Attr,
-        seq_map: String,
+        seq_map: &HashMap<u64, String>,
         mismatch: usize,
     ) -> Result<(), NameError> {
         // this query is a random kmer
@@ -413,9 +414,7 @@ impl StrMappings {
 
         let k = (query.len as f64 / threshold as f64).ceil() as usize;
 
-        let (seq_map, kmer_map) = generate_maps(seq_map, k, mismatch != 0);
-
-        let mut matches: Vec<u64> = Vec::new();
+        let mut matches: Vec<&String> = Vec::new();
 
         if let Some((_, (query_bits, _), _)) = BitNuclKmer::new(
             &self.string[query.start..query.len + query.start],
@@ -425,8 +424,8 @@ impl StrMappings {
         .next()
         {
             if mismatch == 0 {
-                if let Some(_) = seq_map.get(&query_bits) {
-                    matches.push(query_bits)
+                if let Some(s) = seq_map.get(&query_bits) {
+                    matches.push(s)
                 }
             } else {
                 let mut query_kmers: Vec<u64> = Vec::new();
@@ -439,15 +438,16 @@ impl StrMappings {
                     }
                 }
 
-                for (target, kmers) in kmer_map {
-                    let intersection: Vec<u64> = kmers
+                for (target, s) in seq_map.iter() {
+                    let kmers_in_target: Vec<u64> = query_kmers
+                        .clone()
                         .into_iter()
-                        .filter(|e| query_kmers.contains(e))
+                        .filter(|e| e & target == *e)
                         .collect();
 
-                    if intersection.len() >= threshold
+                    if kmers_in_target.len() >= threshold
                         && edit_distance(
-                            target,
+                            *target,
                             // make the length a multiple of eight
                             (((u64::BITS - target.leading_zeros()) + 7 & !7) / 2)
                                 .try_into()
@@ -456,7 +456,7 @@ impl StrMappings {
                             query.len,
                         ) <= mismatch
                     {
-                        matches.push(target)
+                        matches.push(s)
                     }
                 }
             }
@@ -465,7 +465,8 @@ impl StrMappings {
 
         // replace the matched sequence with others
         if !matches.is_empty() {
-            let rep_seq = seq_map.get(matches.first().unwrap()).unwrap();
+            // take the first one
+            let rep_seq = matches.first().unwrap();
 
             let len_dif = query.len as i32 - rep_seq.len() as i32;
 
@@ -491,14 +492,14 @@ impl StrMappings {
             });
 
             if len_dif < 0 {
-                for _ in 0..(len_dif*-1) {
+                for _ in 0..(len_dif * -1) {
                     self.string.insert(query.start, b'A');
                     if let Some(qual) = &mut self.qual {
                         qual.insert(query.start, b'#')
                     }
                 }
             } else {
-                for _ in 0..(len_dif*-1) {
+                for _ in 0..(len_dif * -1) {
                     self.string.remove(query.start);
                     if let Some(qual) = &mut self.qual {
                         qual.insert(query.start, b'#')
@@ -1015,7 +1016,7 @@ impl Read {
         str_type: StrType,
         label: InlineString,
         attr: Attr,
-        seq_map: String,
+        seq_map: &HashMap<u64, String>,
         mismatch: usize,
     ) -> Result<(), NameError> {
         self.str_mappings_mut(str_type)

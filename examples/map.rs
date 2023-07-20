@@ -6,7 +6,7 @@ fn main() {
         .cut(sel!(), tr!(seq1.* -> seq1.brc, seq1.rest), LeftEnd(8))
         .map(
             sel!(),
-            tr!(seq1.brc -> seq1.brc.mapped),
+            tr!(seq1.brc -> seq1.brc.not_mapped),
             String::from("example_data/bc_map.txt"),
             0,
         )

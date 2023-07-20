@@ -19,11 +19,7 @@ struct BCMapRecord {
     rand_hex: String,
 }
 
-pub fn generate_maps(
-    seq_map: String,
-    k: usize,
-    kmer_map: bool,
-) -> (HashMap<u64, String>, HashMap<u64, Vec<u64>>) {
+pub fn generate_map(seq_map: String) -> HashMap<u64, String> {
     let mut rdr = csv::ReaderBuilder::new()
         .delimiter(b'\t')
         .comment(Some(b'#'))
@@ -32,12 +28,9 @@ pub fn generate_maps(
         .expect(format!("Could not open file {}", seq_map).as_str()); // create a custom error for this
 
     let mut hm = HashMap::new();
-    let mut kmer_hm = HashMap::new();
 
     for result in rdr.deserialize() {
         let record: BCMapRecord = result.expect("could not deseralize map record");
-
-        let mut kmers: Vec<u64> = Vec::new();
 
         if let Some((_, (rh, _), _)) = BitNuclKmer::new(
             record.rand_hex.as_bytes(),
@@ -46,23 +39,11 @@ pub fn generate_maps(
         )
         .next()
         {
-            if kmer_map {
-                for i in 0..record.rand_hex.len() - k {
-                    if let Some((_, (kmer, _), _)) =
-                        BitNuclKmer::new(record.rand_hex[i..i + k].as_bytes(), k as u8, false).next()
-                    {
-                        kmers.push(kmer)
-                    }
-                }
-    
-                kmer_hm.insert(rh, kmers);
-            }
-        
             hm.insert(rh, record.oligo_dt.clone());
         }
     }
 
-    (hm, kmer_hm)
+    hm
 }
 
 pub fn edit_distance(target: u64, t_len: usize, query: u64, q_len: usize) -> usize {
@@ -117,6 +98,8 @@ impl<R: Reads> Reads for MapReads<R> {
     fn next_chunk(&self) -> Result<Vec<Read>> {
         let mut reads = self.reads.next_chunk()?;
 
+        let seq_map = generate_map(self.seq_map.clone());
+
         for read in reads.iter_mut() {
             if !(self
                 .selector_expr
@@ -135,7 +118,7 @@ impl<R: Reads> Reads for MapReads<R> {
                     self.label.str_type,
                     self.label.label,
                     attr.clone(),
-                    self.seq_map.clone(),
+                    &seq_map,
                     self.mismatch,
                 )
                 .map_err(|e| Error::NameError {

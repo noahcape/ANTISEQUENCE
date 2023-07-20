@@ -64,7 +64,7 @@ pub enum NameError {
     #[error("Expected {0}, but found {1}")]
     TypeExplicit(&'static str, &'static str),
     #[error("{0}")]
-    Custom(&'static str)
+    Custom(&'static str),
 }
 
 #[derive(Debug)]
