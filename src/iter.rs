@@ -11,7 +11,11 @@ use crate::read::*;
 pub mod trim_reads;
 use trim_reads::*;
 
+pub mod filter_reads;
+use filter_reads::*;
+
 pub mod map_reads;
+use map_reads::*;
 
 pub mod reverse_reads;
 use reverse_reads::*;
@@ -194,6 +198,20 @@ pub trait Reads: Send + Sync {
         Self: Sized,
     {
         MapReads::new(self, selector_expr, transform_expr, seq_map, mismatch)
+    }
+
+    #[must_use]
+    fn filter(
+        self,
+        selector_expr: SelectorExpr,
+        transform_expr: TransformExpr,
+        allow_list: String,
+        mismatch: usize,
+    ) -> FilterReads<Self>
+    where
+        Self: Sized,
+    {
+        FilterReads::new(self, selector_expr, transform_expr, allow_list, mismatch)
     }
 
     /// Pad mappings corresponding labels to specific length
@@ -737,8 +755,6 @@ impl<R: Reads + ?Sized> Reads for Box<R> {
 
 pub use MatchType::*;
 pub use Threshold::*;
-
-use self::map_reads::MapReads;
 
 /// Algorithm types for matching patterns.
 ///

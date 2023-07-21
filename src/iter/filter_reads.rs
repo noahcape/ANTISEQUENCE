@@ -1,63 +1,50 @@
 use needletail::bitkmer::BitNuclKmer;
-use serde::Deserialize;
-use std::collections::HashMap;
+use std::{
+    fs::File,
+    io::{BufRead, BufReader},
+};
 
 use crate::iter::*;
 
-pub struct MapReads<R: Reads> {
+pub struct FilterReads<R: Reads> {
     reads: R,
     selector_expr: SelectorExpr,
     label: Label,
     attr: Option<Attr>,
-    seq_map: HashMap<u64, String>,
+    allow_list: Vec<u64>,
     mismatch: usize,
 }
 
-#[derive(Debug, Deserialize)]
-struct BCMapRecord {
-    oligo_dt: String,
-    rand_hex: String,
+pub fn parse_allowlist(filename: String) -> Vec<u64> {
+    let file = File::open(filename.clone()).expect("no such file");
+
+    BufReader::new(file)
+        .lines()
+        .map(|l| {
+            let seq = l.expect("Could not parse line");
+            if let Some((_, (rh, _), _)) =
+                BitNuclKmer::new(seq.as_bytes(), seq.len() as u8, false).next()
+            {
+                rh
+            } else {
+                panic!("Could not parse {} for allowlist", filename)
+            }
+        })
+        .collect()
 }
 
-pub fn generate_map(seq_map: String) -> HashMap<u64, String> {
-    let mut rdr = csv::ReaderBuilder::new()
-        .delimiter(b'\t')
-        .comment(Some(b'#'))
-        .has_headers(false)
-        .from_path(seq_map.clone())
-        .expect(format!("Could not open file {}", seq_map).as_str()); // create a custom error for this
-
-    let mut hm = HashMap::new();
-
-    for result in rdr.deserialize() {
-        let record: BCMapRecord = result.expect("could not deseralize map record");
-
-        if let Some((_, (rh, _), _)) = BitNuclKmer::new(
-            record.rand_hex.as_bytes(),
-            record.rand_hex.len() as u8,
-            false,
-        )
-        .next()
-        {
-            hm.insert(rh, record.oligo_dt.clone());
-        }
-    }
-
-    hm
-}
-
-impl<R: Reads> MapReads<R> {
+impl<R: Reads> FilterReads<R> {
     pub fn new(
         reads: R,
         selector_expr: SelectorExpr,
         transform_expr: TransformExpr,
-        seq_map: String,
+        allow_list: String,
         mismatch: usize,
     ) -> Self {
         transform_expr.check_size(1, 1, "checking length in bounds");
         transform_expr.check_same_str_type("checking length in bounds");
 
-        let seq_map = generate_map(seq_map.clone());
+        let allow_list = parse_allowlist(allow_list);
 
         Self {
             reads,
@@ -67,13 +54,13 @@ impl<R: Reads> MapReads<R> {
                 LabelOrAttr::Attr(a) => a,
                 _ => panic!("Expected type.label.attr after the \"->\" in the transform expression when checking length in bounds"),
             }),
-            seq_map,
+            allow_list,
             mismatch
         }
     }
 }
 
-impl<R: Reads> Reads for MapReads<R> {
+impl<R: Reads> Reads for FilterReads<R> {
     fn next_chunk(&self) -> Result<Vec<Read>> {
         let mut reads = self.reads.next_chunk()?;
 
@@ -91,17 +78,17 @@ impl<R: Reads> Reads for MapReads<R> {
             }
 
             if let Some(attr) = &self.attr {
-                read.map(
+                read.filter(
                     self.label.str_type,
                     self.label.label,
                     attr.clone(),
-                    &self.seq_map,
+                    &self.allow_list,
                     self.mismatch,
                 )
                 .map_err(|e| Error::NameError {
                     source: e,
                     read: read.clone(),
-                    context: "mapping read",
+                    context: "filtering reads",
                 })?;
             }
         }

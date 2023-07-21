@@ -9,7 +9,6 @@ use crate::errors::{self, Name, NameError};
 use crate::expr::Attr;
 use crate::fastq::Origin;
 use crate::inline_string::*;
-use crate::map_reads::*;
 use crate::normalize_reads::*;
 use crate::revcomp_reads::COMPLEMENT;
 
@@ -393,6 +392,79 @@ impl StrMappings {
             .collect::<Vec<u8>>();
 
         self.string.splice(range, revcomp.clone());
+
+        Ok(())
+    }
+
+    pub fn filter(
+        &mut self,
+        label: InlineString,
+        attr: Attr,
+        allow_list: &Vec<u64>,
+        mismatch: usize,
+    ) -> Result<(), NameError> {
+        let query = self
+            .mapping(label)
+            .ok_or_else(|| NameError::NotInRead(Name::Label(label)))?
+            .clone();
+
+        let threshold = mismatch + 1;
+
+        let k = (query.len as f64 / threshold as f64).ceil() as usize;
+
+        let mut matches: Vec<u64> = Vec::new();
+
+        let query_bits = if let Some((_, (query_bits, _), _)) = BitNuclKmer::new(
+            &self.string[query.start..query.len + query.start],
+            query.len as u8,
+            false,
+        )
+        .next()
+        {
+            query_bits
+        } else {
+            return Err(NameError::Custom("Could not parse read"));
+        };
+
+        if mismatch == 0 {
+            if allow_list.contains(&query_bits) {
+                matches.push(query_bits)
+            }
+        } else {
+            let mut kmers = Vec::new();
+
+            for i in 0..query.len - k {
+                if let Some((_, (query_bits, _), _)) =
+                    BitNuclKmer::new(&self.string[i..i + k], k as u8, false).next()
+                {
+                    kmers.push(query_bits)
+                };
+            }
+
+            for target in allow_list {
+                let in_target: Vec<u64> = kmers
+                    .clone()
+                    .into_iter()
+                    .filter(|e| e & target == *e)
+                    .collect();
+                if in_target.len() >= threshold
+                    && edit_distance(
+                        *target,
+                        // make the length a multiple of eight
+                        (((u64::BITS - target.leading_zeros()) + 7 & !7) / 2)
+                            .try_into()
+                            .unwrap(),
+                        query_bits,
+                        query.len,
+                    ) <= mismatch
+                {
+                    matches.push(*target)
+                }
+            }
+        }
+
+        // set the attribute
+        *self.data_mut(attr.label, attr.attr).unwrap() = Data::Bool(!matches.is_empty());
 
         Ok(())
     }
@@ -1024,6 +1096,19 @@ impl Read {
             .map(label, attr, seq_map, mismatch)
     }
 
+    pub fn filter(
+        &mut self,
+        str_type: StrType,
+        label: InlineString,
+        attr: Attr,
+        allow_list: &Vec<u64>,
+        mismatch: usize,
+    ) -> Result<(), NameError> {
+        self.str_mappings_mut(str_type)
+            .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?
+            .filter(label, attr, allow_list, mismatch)
+    }
+
     pub fn first_idx(&self) -> usize {
         self.str_mappings.iter().map(|(_, s)| s.idx).min().unwrap()
     }
@@ -1195,5 +1280,28 @@ impl fmt::Display for StrType {
             Index1 => write!(f, "index1"),
             Index2 => write!(f, "index2"),
         }
+    }
+}
+
+fn edit_distance(target: u64, t_len: usize, query: u64, q_len: usize) -> usize {
+    if t_len == 0 {
+        return q_len;
+    }
+
+    if q_len == 0 {
+        return t_len;
+    }
+
+    if target & 3 == query & 3 {
+        edit_distance(target >> 2, t_len - 1, query >> 2, q_len - 1)
+    } else {
+        1 + [
+            edit_distance(target >> 2, t_len - 1, query, q_len),
+            edit_distance(target, t_len, query >> 2, q_len - 1),
+            edit_distance(target >> 2, t_len - 1, query >> 2, q_len - 1),
+        ]
+        .into_iter()
+        .min()
+        .unwrap()
     }
 }
