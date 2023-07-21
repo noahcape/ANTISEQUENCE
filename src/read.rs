@@ -433,7 +433,7 @@ impl StrMappings {
         } else {
             let mut kmers = Vec::new();
 
-            for i in query.start..=query.start+query.len - k {
+            for i in query.start..=query.start + query.len - k {
                 if let Some((_, (kmer, _), _)) =
                     BitNuclKmer::new(&self.string[i..i + k], k as u8, false).next()
                 {
@@ -501,7 +501,7 @@ impl StrMappings {
             } else {
                 let mut query_kmers: Vec<(usize, u64)> = Vec::new();
 
-                for i in query.start..=query.start+query.len - k {
+                for i in query.start..=query.start + query.len - k {
                     if let Some((_, (kmer, _), _)) =
                         BitNuclKmer::new(&self.string[i..i + k], k as u8, false).next()
                     {
@@ -630,12 +630,15 @@ impl StrMappings {
             let nuc = NUC_MAP.get(length_diff & (usize::MAX & 3)).unwrap();
             length_diff >>= 2;
 
-            self.string.insert(normalized.start + normalized.len, *nuc)
+            self.string.insert(
+                normalized.start + normalized.len + long_len - normalized.len,
+                *nuc,
+            )
         }
 
         if let Some(qual) = &mut self.qual {
             for _ in 0..normed_len {
-                qual.insert(normalized.start + normalized.len, b'#');
+                qual.insert(normalized.start + normalized.len, b'+');
             }
         }
 
