@@ -630,7 +630,7 @@ impl StrMappings {
             let nuc = NUC_MAP.get(length_diff & (usize::MAX & 3)).unwrap();
             length_diff >>= 2;
 
-            self.string.insert(self.string.len(), *nuc)
+            self.string.insert(normalized.start + normalized.len, *nuc)
         }
 
         if let Some(qual) = &mut self.qual {
