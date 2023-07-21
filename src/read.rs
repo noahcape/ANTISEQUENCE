@@ -408,9 +408,9 @@ impl StrMappings {
             .ok_or_else(|| NameError::NotInRead(Name::Label(label)))?
             .clone();
 
-        let threshold = mismatch + 1;
+        let threshold = if mismatch > 2 { mismatch + 1 } else { mismatch };
 
-        let k = (query.len as f64 / threshold as f64).ceil() as usize;
+        let k = (query.len as f64 / (mismatch + 1) as f64).ceil() as usize;
 
         let mut matches: Vec<u64> = Vec::new();
 
@@ -433,30 +433,29 @@ impl StrMappings {
         } else {
             let mut kmers = Vec::new();
 
-            for i in 0..query.len - k {
+            for i in 0..=query.len - k {
                 if let Some((_, (query_bits, _), _)) =
                     BitNuclKmer::new(&self.string[i..i + k], k as u8, false).next()
                 {
-                    kmers.push(query_bits)
+                    kmers.push((i, query_bits))
                 };
             }
 
             for target in allow_list {
-                let in_target: Vec<u64> = kmers
+                let in_target: Vec<(usize, u64)> = kmers
                     .clone()
                     .into_iter()
-                    .filter(|e| e & target == *e)
+                    .filter(|(i, e)| {
+                        let sre = e << ((query.len - (k + i)) * 2);
+                        let mask: u64 = (!0 as u64).overflowing_shr(u64::BITS - (k * 2) as u32).0
+                            << ((query.len - (k + i)) * 2);
+                        target & mask == sre
+                    })
                     .collect();
+
+                // use query length
                 if in_target.len() >= threshold
-                    && edit_distance(
-                        *target,
-                        // make the length a multiple of eight
-                        (((u64::BITS - target.leading_zeros()) + 7 & !7) / 2)
-                            .try_into()
-                            .unwrap(),
-                        query_bits,
-                        query.len,
-                    ) <= mismatch
+                    && edit_distance(*target, query.len, query_bits, query.len) <= mismatch
                 {
                     matches.push(*target)
                 }
@@ -482,9 +481,9 @@ impl StrMappings {
             .ok_or_else(|| NameError::NotInRead(Name::Label(label)))?
             .clone();
 
-        let threshold = mismatch + 1;
+        let threshold = if mismatch > 2 { mismatch + 1 } else { mismatch };
 
-        let k = (query.len as f64 / threshold as f64).ceil() as usize;
+        let k = (query.len as f64 / (mismatch + 1) as f64).ceil() as usize;
 
         let mut matches: Vec<&String> = Vec::new();
 
@@ -500,21 +499,27 @@ impl StrMappings {
                     matches.push(s)
                 }
             } else {
-                let mut query_kmers: Vec<u64> = Vec::new();
+                let mut query_kmers: Vec<(usize, u64)> = Vec::new();
 
                 for i in 0..query.len - k {
                     if let Some((_, (kmer, _), _)) =
                         BitNuclKmer::new(&self.string[i..i + k], k as u8, false).next()
                     {
-                        query_kmers.push(kmer)
+                        query_kmers.push((i, kmer))
                     }
                 }
 
                 for (target, s) in seq_map.iter() {
-                    let kmers_in_target: Vec<u64> = query_kmers
+                    let kmers_in_target: Vec<(usize, u64)> = query_kmers
                         .clone()
                         .into_iter()
-                        .filter(|e| e & target == *e)
+                        .filter(|(i, e)| {
+                            let sre = e << ((query.len - (k + i)) * 2);
+                            let mask: u64 =
+                                (!0 as u64).overflowing_shr(u64::BITS - (k * 2) as u32).0
+                                    << ((query.len - (k + i)) * 2);
+                            target & mask == sre
+                        })
                         .collect();
 
                     if kmers_in_target.len() >= threshold
