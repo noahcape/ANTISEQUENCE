@@ -414,16 +414,35 @@ impl StrMappings {
 
         let mut matches: Vec<u64> = Vec::new();
 
-        let query_bits = if let Some((_, (query_bits, _), _)) = BitNuclKmer::new(
+        let mut query_bits = 0;
+
+        if let Some((_, (bit_nucs, _), _)) = BitNuclKmer::new(
             &self.string[query.start..query.len + query.start],
             query.len as u8,
             false,
         )
         .next()
         {
-            query_bits
+            query_bits = bit_nucs
         } else {
-            return Err(NameError::Custom("Could not parse read"));
+            // if this happens it's possible there was an N and it should be replaced
+            let pos_n: Option<usize> = self.string.iter().position(|el| el == &b'N');
+
+            match pos_n {
+                Some(n) => {
+                    let mut swap_string = self.string.clone();
+                    swap_string.splice(n..n+1, "A".bytes().into_iter());
+                    if let Some((_, (bit_nucs, _), _)) = BitNuclKmer::new(
+                        &swap_string[query.start..query.len + query.start],
+                        query.len as u8,
+                        false,
+                    )
+                    .next() {
+                        query_bits = bit_nucs
+                    }
+                },
+                None => ()
+            }
         };
 
         if mismatch == 0 {
