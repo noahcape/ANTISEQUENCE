@@ -343,7 +343,61 @@ impl StrMappings {
         Ok(())
     }
 
-    pub fn truncate(&mut self, label: InlineString, by_length: EndIdx) -> Result<(), NameError> {
+    pub fn truncate_to(&mut self, label: InlineString, to_length: EndIdx) -> Result<(), NameError> {
+        let truncated = self
+            .mapping(label)
+            .ok_or_else(|| NameError::NotInRead(Name::Label(label)))?
+            .clone();
+
+        let end_length = match to_length {
+            LeftEnd(n) => n,
+            RightEnd(n) => n,
+        };
+
+        if end_length > truncated.len {
+            return Err(NameError::ModifyError(
+                "truncate",
+                Data::UInt(truncated.len),
+                Data::UInt(end_length),
+            ));
+        }
+
+        let trunc_len = truncated.len - end_length;
+
+        self.mappings.iter_mut().for_each(|m| {
+            use ExtendInterval::*;
+            // note subtraction so in practice reverse extending
+            match truncated.extend_direction(m) {
+                Start => m.start -= trunc_len,
+                End => m.len -= trunc_len,
+                Leave => (),
+            }
+        });
+
+        for _ in 0..trunc_len {
+            let insert_idx = match to_length {
+                LeftEnd(_) => truncated.start,
+                RightEnd(_) => truncated.start + truncated.len,
+            };
+
+            self.string.remove(insert_idx);
+        }
+
+        if let Some(qual) = &mut self.qual {
+            for _ in 0..trunc_len {
+                let insert_idx = match to_length {
+                    LeftEnd(_) => truncated.start,
+                    RightEnd(_) => truncated.start + truncated.len,
+                };
+
+                qual.remove(insert_idx);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn truncate_by(&mut self, label: InlineString, by_length: EndIdx) -> Result<(), NameError> {
         let truncated = self
             .mapping(label)
             .ok_or_else(|| NameError::NotInRead(Name::Label(label)))?
@@ -353,6 +407,14 @@ impl StrMappings {
             LeftEnd(n) => n,
             RightEnd(n) => n,
         };
+
+        if trunc_len > truncated.len {
+            return Err(NameError::ModifyError(
+                "truncate",
+                Data::UInt(truncated.len),
+                Data::UInt(trunc_len),
+            ));
+        }
 
         self.mappings.iter_mut().for_each(|m| {
             use ExtendInterval::*;
@@ -602,14 +664,14 @@ impl StrMappings {
                 for _ in 0..(len_dif * -1) {
                     self.string.insert(query.start, b'A');
                     if let Some(qual) = &mut self.qual {
-                        qual.insert(query.start, b'#')
+                        qual.insert(query.start, UNKNOWN_QUAL)
                     }
                 }
             } else {
                 for _ in 0..(len_dif * -1) {
                     self.string.remove(query.start);
                     if let Some(qual) = &mut self.qual {
-                        qual.insert(query.start, b'#')
+                        qual.insert(query.start, UNKNOWN_QUAL)
                     }
                 }
             }
@@ -1104,7 +1166,7 @@ impl Read {
             .pad(label, max_length, pad_char)
     }
 
-    pub fn truncate(
+    pub fn truncate_by(
         &mut self,
         str_type: StrType,
         label: InlineString,
@@ -1112,7 +1174,18 @@ impl Read {
     ) -> Result<(), NameError> {
         self.str_mappings_mut(str_type)
             .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?
-            .truncate(label, by_length)
+            .truncate_by(label, by_length)
+    }
+
+    pub fn truncate_to(
+        &mut self,
+        str_type: StrType,
+        label: InlineString,
+        to_length: EndIdx,
+    ) -> Result<(), NameError> {
+        self.str_mappings_mut(str_type)
+            .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?
+            .truncate_to(label, to_length)
     }
 
     pub fn revcomp(&mut self, str_type: StrType, label: InlineString) -> Result<(), NameError> {

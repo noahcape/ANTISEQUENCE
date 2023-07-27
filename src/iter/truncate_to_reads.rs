@@ -1,29 +1,29 @@
 use crate::iter::*;
 
-pub struct TruncateReads<R: Reads> {
+pub struct TruncateToReads<R: Reads> {
     reads: R,
     selector_expr: SelectorExpr,
     labels: Vec<Label>,
-    by_length: EndIdx,
+    to_length: EndIdx,
 }
 
-impl<R: Reads> TruncateReads<R> {
+impl<R: Reads> TruncateToReads<R> {
     pub fn new(
         reads: R,
         selector_expr: SelectorExpr,
         labels: Vec<Label>,
-        by_length: EndIdx,
+        to_length: EndIdx,
     ) -> Self {
         Self {
             reads,
             selector_expr,
             labels,
-            by_length,
+            to_length,
         }
     }
 }
 
-impl<R: Reads> Reads for TruncateReads<R> {
+impl<R: Reads> Reads for TruncateToReads<R> {
     fn next_chunk(&self) -> Result<Vec<Read>> {
         let mut reads = self.reads.next_chunk()?;
 
@@ -42,7 +42,7 @@ impl<R: Reads> Reads for TruncateReads<R> {
 
             self.labels
                 .iter()
-                .try_for_each(|l| read.truncate(l.str_type, l.label, self.by_length))
+                .try_for_each(|l| read.truncate_to(l.str_type, l.label, self.to_length))
                 .map_err(|e| Error::NameError {
                     source: e,
                     read: read.clone(),

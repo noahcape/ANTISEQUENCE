@@ -26,8 +26,11 @@ use revcomp_reads::*;
 pub mod pad_reads;
 use pad_reads::*;
 
-pub mod truncate_reads;
-use truncate_reads::*;
+pub mod truncate_by_reads;
+use truncate_by_reads::*;
+
+pub mod truncate_to_reads;
+use truncate_to_reads::*;
 
 pub mod collect_fastq_reads;
 use collect_fastq_reads::*;
@@ -231,20 +234,36 @@ pub trait Reads: Send + Sync {
         PadReads::new(self, selector_expr, labels.into(), max_length, pad_char)
     }
 
-    /// Truncate mappings corresponding labels to specific length
+    /// Truncate mappings corresponding labels by specific length
     ///
-    /// Use `max_length: EndIdx` to specify the length and end of read to truncate from
+    /// Use `by_length: EndIdx` to specify the length and end of read to truncate by and from
     #[must_use]
-    fn trunc(
+    fn trunc_by(
         self,
         selector_expr: SelectorExpr,
         labels: impl Into<Vec<Label>>,
-        max_length: EndIdx,
-    ) -> TruncateReads<Self>
+        by_length: EndIdx,
+    ) -> TruncateByReads<Self>
     where
         Self: Sized,
     {
-        TruncateReads::new(self, selector_expr, labels.into(), max_length)
+        TruncateByReads::new(self, selector_expr, labels.into(), by_length)
+    }
+
+    /// Truncate mappings corresponding labels to specific length
+    ///
+    /// Use `to_length: EndIdx` to specify the length and end of read to truncate to and from
+    #[must_use]
+    fn trunc_to(
+        self,
+        selector_expr: SelectorExpr,
+        labels: impl Into<Vec<Label>>,
+        to_length: EndIdx,
+    ) -> TruncateToReads<Self>
+    where
+        Self: Sized,
+    {
+        TruncateToReads::new(self, selector_expr, labels.into(), to_length)
     }
 
     /// Set mappings corresponding labels to their reverse complement
