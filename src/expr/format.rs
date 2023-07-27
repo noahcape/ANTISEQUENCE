@@ -3,7 +3,7 @@ use crate::expr;
 use crate::parse_utils::*;
 use crate::read::*;
 
-const UNKNOWN_QUAL: u8 = b'I';
+pub const UNKNOWN_QUAL: u8 = b'I';
 
 #[derive(Debug, Clone)]
 pub struct FormatExpr {

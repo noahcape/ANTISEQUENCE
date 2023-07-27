@@ -6,7 +6,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::errors::{self, Name, NameError};
-use crate::expr::Attr;
+use crate::expr::{Attr, UNKNOWN_QUAL};
 use crate::fastq::Origin;
 use crate::inline_string::*;
 use crate::normalize_reads::*;
@@ -288,7 +288,7 @@ impl StrMappings {
     pub fn pad(
         &mut self,
         label: InlineString,
-        by_length: EndIdx,
+        max_length: EndIdx,
         pad_char: u8,
     ) -> Result<(), NameError> {
         let padded = self
@@ -296,10 +296,20 @@ impl StrMappings {
             .ok_or_else(|| NameError::NotInRead(Name::Label(label)))?
             .clone();
 
-        let pad_length = match by_length {
+        let to_length = match max_length {
             LeftEnd(n) => n,
             RightEnd(n) => n,
         };
+
+        if padded.len > to_length {
+            return Err(NameError::ModifyError(
+                "pad",
+                Data::UInt(padded.len),
+                Data::UInt(to_length),
+            ));
+        }
+
+        let pad_length = to_length - padded.len;
 
         self.mappings.iter_mut().for_each(|m| {
             use ExtendInterval::*;
@@ -311,7 +321,7 @@ impl StrMappings {
         });
 
         for _ in 0..pad_length {
-            let insert_idx = match by_length {
+            let insert_idx = match max_length {
                 LeftEnd(_) => padded.start,
                 RightEnd(_) => padded.start + padded.len,
             };
@@ -321,12 +331,12 @@ impl StrMappings {
 
         if let Some(qual) = &mut self.qual {
             for _ in 0..pad_length {
-                let insert_idx = match by_length {
+                let insert_idx = match max_length {
                     LeftEnd(_) => padded.start,
                     RightEnd(_) => padded.start + padded.len,
                 };
 
-                qual.insert(insert_idx, pad_char);
+                qual.insert(insert_idx, UNKNOWN_QUAL);
             }
         }
 
@@ -431,17 +441,18 @@ impl StrMappings {
             match pos_n {
                 Some(n) => {
                     let mut swap_string = self.string.clone();
-                    swap_string.splice(n..n+1, "A".bytes().into_iter());
+                    swap_string.splice(n..n + 1, "A".bytes().into_iter());
                     if let Some((_, (bit_nucs, _), _)) = BitNuclKmer::new(
                         &swap_string[query.start..query.len + query.start],
                         query.len as u8,
                         false,
                     )
-                    .next() {
+                    .next()
+                    {
                         query_bits = bit_nucs
                     }
-                },
-                None => ()
+                }
+                None => (),
             }
         };
 
@@ -657,7 +668,7 @@ impl StrMappings {
 
         if let Some(qual) = &mut self.qual {
             for _ in 0..normed_len {
-                qual.insert(normalized.start + normalized.len, b'+');
+                qual.insert(normalized.start + normalized.len, UNKNOWN_QUAL);
             }
         }
 
@@ -1085,12 +1096,12 @@ impl Read {
         &mut self,
         str_type: StrType,
         label: InlineString,
-        by_length: EndIdx,
+        max_length: EndIdx,
         pad_char: u8,
     ) -> Result<(), NameError> {
         self.str_mappings_mut(str_type)
             .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?
-            .pad(label, by_length, pad_char)
+            .pad(label, max_length, pad_char)
     }
 
     pub fn truncate(

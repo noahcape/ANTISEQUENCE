@@ -63,6 +63,8 @@ pub enum NameError {
     Type(&'static str, Data),
     #[error("Expected {0}, but found {1}")]
     TypeExplicit(&'static str, &'static str),
+    #[error("Cannot {0} element from {1:?} to {2:?}")]
+    ModifyError(&'static str, Data, Data),
     #[error("{0}")]
     Custom(&'static str),
 }
