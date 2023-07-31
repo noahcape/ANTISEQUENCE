@@ -18,6 +18,7 @@ memchr = "2.5"
 colored = "2.0"
 lazy_static = "1.4.0"
 csv = "1.2"
+simdna = { git = "https://github.com/noahcape/simdna.git", branch = "main" }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 block-aligner = { git = "https://github.com/Daniel-Liu-c0deb0t/block-aligner", branch = "dev", features = ["simd_avx2"] }

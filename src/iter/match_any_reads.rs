@@ -1,6 +1,7 @@
 use block_aligner::{cigar::*, scan_block::*, scores::*};
 
 use memchr::memmem;
+use simdna::seed::Patterns as SeedPatterns;
 
 use crate::iter::*;
 
@@ -364,15 +365,33 @@ fn hamming(a: &[u8], b: &[u8], threshold: usize) -> Option<usize> {
 fn hamming_search(a: &[u8], b: &[u8], threshold: usize) -> Option<(usize, usize, usize)> {
     let mut best_match = None;
 
-    for (i, w) in a.windows(b.len()).enumerate() {
-        if let Some(matches) = hamming(w, b, threshold) {
+    let fps = SeedPatterns::new(b);
+    let seeds = fps.seed(a, 0.0);
+
+    for idx in &seeds {
+        let idx = *idx;
+        if let Some(matches) = hamming(&a[idx..idx + b.len()], b, threshold) {
             if let Some((best_matches, _, _)) = best_match {
                 if matches <= best_matches {
                     continue;
                 }
             }
 
-            best_match = Some((matches, i, i + b.len()));
+            best_match = Some((matches, idx, idx + b.len()));
+        }
+    }
+
+    if seeds.is_empty() || best_match.is_none() {
+        for (i, w) in a.windows(b.len()).enumerate() {
+            if let Some(matches) = hamming(w, b, threshold) {
+                if let Some((best_matches, _, _)) = best_match {
+                    if matches <= best_matches {
+                        continue;
+                    }
+                }
+
+                best_match = Some((matches, i, i + b.len()));
+            }
         }
     }
 
