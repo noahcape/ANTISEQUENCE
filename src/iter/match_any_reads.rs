@@ -365,8 +365,8 @@ fn hamming(a: &[u8], b: &[u8], threshold: usize) -> Option<usize> {
 fn hamming_search(a: &[u8], b: &[u8], threshold: usize) -> Option<(usize, usize, usize)> {
     let mut best_match = None;
 
-    let fps = SeedPatterns::new(b);
-    let seeds = fps.seed(a, 0.0);
+    let fps = SeedPatterns::new(b, threshold);
+    let seeds = fps.seed(a);
 
     for idx in &seeds {
         let idx = *idx;
@@ -378,20 +378,6 @@ fn hamming_search(a: &[u8], b: &[u8], threshold: usize) -> Option<(usize, usize,
             }
 
             best_match = Some((matches, idx, idx + b.len()));
-        }
-    }
-
-    if seeds.is_empty() || best_match.is_none() {
-        for (i, w) in a.windows(b.len()).enumerate() {
-            if let Some(matches) = hamming(w, b, threshold) {
-                if let Some((best_matches, _, _)) = best_match {
-                    if matches <= best_matches {
-                        continue;
-                    }
-                }
-
-                best_match = Some((matches, i, i + b.len()));
-            }
         }
     }
 
