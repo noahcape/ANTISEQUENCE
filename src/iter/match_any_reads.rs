@@ -1,7 +1,9 @@
+use std::arch::aarch64::uint8x16_t;
+
 use block_aligner::{cigar::*, scan_block::*, scores::*};
 
 use memchr::memmem;
-use simdna::seed::Patterns as SeedPatterns;
+use simdna::seed::SIMDna;
 
 use crate::iter::*;
 
@@ -365,19 +367,24 @@ fn hamming(a: &[u8], b: &[u8], threshold: usize) -> Option<usize> {
 fn hamming_search(a: &[u8], b: &[u8], threshold: usize) -> Option<(usize, usize, usize)> {
     let mut best_match = None;
 
-    let fps = SeedPatterns::new(b, threshold);
-    let seeds = fps.seed(a);
+    let finger_prints: uint8x16_t = unsafe { simdna::seed::SIMDna::load_pattern(b) };
 
-    for idx in &seeds {
-        let idx = *idx;
-        if let Some(matches) = hamming(&a[idx..idx + b.len()], b, threshold) {
-            if let Some((best_matches, _, _)) = best_match {
-                if matches <= best_matches {
-                    continue;
+    let mut start = 0;
+
+    loop {
+        if let Some(idx) = unsafe { finger_prints.locate(a, 3, &mut start) } {
+            if let Some(matches) = hamming(b, &a[idx..idx + b.len()], threshold) {
+                if let Some((best_matches, _, _)) = best_match {
+                    if matches <= best_matches {
+                        continue;
+                    }
                 }
+                best_match = Some((matches, idx, idx + b.len()));
             }
 
-            best_match = Some((matches, idx, idx + b.len()));
+            start = idx + 1;
+        } else {
+            break;
         }
     }
 
