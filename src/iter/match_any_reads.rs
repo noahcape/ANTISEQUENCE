@@ -373,6 +373,10 @@ fn hamming_search(a: &[u8], b: &[u8], threshold: usize) -> Option<(usize, usize,
 
     loop {
         if let Some(idx) = unsafe { finger_prints.locate(a, 3, &mut start) } {
+            if idx + b.len() > a.len() {
+                break;
+            }
+
             if let Some(matches) = hamming(b, &a[idx..idx + b.len()], threshold) {
                 if let Some((best_matches, _, _)) = best_match {
                     if matches <= best_matches {
