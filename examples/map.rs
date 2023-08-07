@@ -8,7 +8,7 @@ fn main() {
             sel!(),
             tr!(seq1.brc -> seq1.brc.not_mapped),
             String::from("example_data/bc_map.txt"),
-            0,
+            1,
         )
         .dbg(sel!())
         .collect_fastq1(sel!(), "example_output/map.fastq")

@@ -1,4 +1,3 @@
-use needletail::bitkmer::BitNuclKmer;
 use std::{
     fs::File,
     io::{BufRead, BufReader},
@@ -11,26 +10,20 @@ pub struct FilterReads<R: Reads> {
     selector_expr: SelectorExpr,
     label: Label,
     attr: Option<Attr>,
-    allow_list: Vec<u64>,
+    allow_list: Vec<Vec<u8>>,
     mismatch: usize,
 }
 
-pub fn parse_allowlist(filename: String) -> Vec<u64> {
-    let file = File::open(filename.clone()).expect("no such file");
+pub fn parse_allowlist(filename: impl AsRef<Path>) -> Vec<Vec<u8>> {
+    let file = File::open(filename.as_ref()).expect("no such file");
 
     BufReader::new(file)
         .lines()
         .map(|l| {
             let seq = l.expect("Could not parse line");
-            if let Some((_, (rh, _), _)) =
-                BitNuclKmer::new(seq.as_bytes(), seq.len() as u8, false).next()
-            {
-                rh
-            } else {
-                panic!("Could not parse {} for allowlist", filename)
-            }
+            seq.as_bytes().to_vec()
         })
-        .collect()
+        .collect::<Vec<_>>()
 }
 
 impl<R: Reads> FilterReads<R> {
@@ -38,7 +31,7 @@ impl<R: Reads> FilterReads<R> {
         reads: R,
         selector_expr: SelectorExpr,
         transform_expr: TransformExpr,
-        allow_list: String,
+        allow_list: impl AsRef<Path>,
         mismatch: usize,
     ) -> Self {
         transform_expr.check_size(1, 1, "checking length in bounds");
@@ -82,7 +75,7 @@ impl<R: Reads> Reads for FilterReads<R> {
                     self.label.str_type,
                     self.label.label,
                     attr.clone(),
-                    &self.allow_list,
+                    self.allow_list.clone(),
                     self.mismatch,
                 )
                 .map_err(|e| Error::NameError {

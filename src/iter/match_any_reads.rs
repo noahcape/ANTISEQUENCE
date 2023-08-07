@@ -323,7 +323,7 @@ impl<R: Reads> Reads for MatchAnyReads<R> {
     }
 }
 
-fn hamming(a: &[u8], b: &[u8], threshold: usize) -> Option<usize> {
+pub fn hamming(a: &[u8], b: &[u8], threshold: usize) -> Option<usize> {
     if a.len() != b.len() {
         return None;
     }

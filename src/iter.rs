@@ -1,5 +1,6 @@
 use std::marker::{Send, Sync};
 use std::ops::RangeBounds;
+use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 
@@ -194,7 +195,7 @@ pub trait Reads: Send + Sync {
         self,
         selector_expr: SelectorExpr,
         transform_expr: TransformExpr,
-        seq_map: String,
+        seq_map: impl AsRef<Path>,
         mismatch: usize,
     ) -> MapReads<Self>
     where
@@ -208,7 +209,7 @@ pub trait Reads: Send + Sync {
         self,
         selector_expr: SelectorExpr,
         transform_expr: TransformExpr,
-        allow_list: String,
+        allow_list: impl AsRef<Path>,
         mismatch: usize,
     ) -> FilterReads<Self>
     where

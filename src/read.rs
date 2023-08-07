@@ -1,6 +1,7 @@
-use needletail::bitkmer::BitNuclKmer;
 use rustc_hash::FxHashMap;
+use simdna::seed::SIMDna;
 
+use std::arch::aarch64::uint8x16_t;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -9,6 +10,7 @@ use crate::errors::{self, Name, NameError};
 use crate::expr::{Attr, UNKNOWN_QUAL};
 use crate::fastq::Origin;
 use crate::inline_string::*;
+use crate::match_any_reads::hamming;
 use crate::normalize_reads::*;
 use crate::revcomp_reads::COMPLEMENT;
 
@@ -472,7 +474,7 @@ impl StrMappings {
         &mut self,
         label: InlineString,
         attr: Attr,
-        allow_list: &Vec<u64>,
+        allow_list: Vec<Vec<u8>>,
         mismatch: usize,
     ) -> Result<(), NameError> {
         let query = self
@@ -480,82 +482,46 @@ impl StrMappings {
             .ok_or_else(|| NameError::NotInRead(Name::Label(label)))?
             .clone();
 
-        let threshold = if mismatch > 2 { mismatch + 1 } else { mismatch };
+        let query_pattern = &self.string[query.start..query.len + query.start];
 
-        let k = (query.len as f64 / (mismatch + 1) as f64).ceil() as usize;
-
-        let mut matches: Vec<u64> = Vec::new();
-
-        let mut query_bits = 0;
-
-        if let Some((_, (bit_nucs, _), _)) = BitNuclKmer::new(
-            &self.string[query.start..query.len + query.start],
-            query.len as u8,
-            false,
-        )
-        .next()
-        {
-            query_bits = bit_nucs
-        } else {
-            // if this happens it's possible there was an N and it should be replaced
-            let pos_n: Option<usize> = self.string.iter().position(|el| el == &b'N');
-
-            match pos_n {
-                Some(n) => {
-                    let mut swap_string = self.string.clone();
-                    swap_string.splice(n..n + 1, "A".bytes().into_iter());
-                    if let Some((_, (bit_nucs, _), _)) = BitNuclKmer::new(
-                        &swap_string[query.start..query.len + query.start],
-                        query.len as u8,
-                        false,
-                    )
-                    .next()
-                    {
-                        query_bits = bit_nucs
-                    }
-                }
-                None => (),
-            }
-        };
+        let pattern: uint8x16_t = unsafe { SIMDna::load_pattern(query_pattern) };
 
         if mismatch == 0 {
-            if allow_list.contains(&query_bits) {
-                matches.push(query_bits)
-            }
-        } else {
-            let mut kmers = Vec::new();
+            // set the attribute
+            *self.data_mut(attr.label, attr.attr).unwrap() =
+                Data::Bool(allow_list.contains(&query_pattern.to_vec()));
 
-            for i in query.start..=query.start + query.len - k {
-                if let Some((_, (kmer, _), _)) =
-                    BitNuclKmer::new(&self.string[i..i + k], k as u8, false).next()
-                {
-                    kmers.push((i - query.start, kmer))
-                };
-            }
+            return Ok(());
+        }
 
-            for target in allow_list {
-                let in_target: Vec<(usize, u64)> = kmers
-                    .clone()
-                    .into_iter()
-                    .filter(|(i, e)| {
-                        let sre = e << ((query.len - (k + i)) * 2);
-                        let mask: u64 = (!0 as u64).overflowing_shr(u64::BITS - (k * 2) as u32).0
-                            << ((query.len - (k + i)) * 2);
-                        target & mask == sre
-                    })
-                    .collect();
+        for ref_ in allow_list {
+            let mut start = 0;
 
-                // use query length
-                if in_target.len() >= threshold
-                    && edit_distance(*target, query.len, query_bits, query.len) <= mismatch
-                {
-                    matches.push(*target)
+            loop {
+                if let Some(idx) = unsafe { pattern.locate(&ref_, 3, &mut start) } {
+                    if idx + query.len > ref_.len() {
+                        break;
+                    }
+
+                    if let Some(_) = hamming(
+                        query_pattern,
+                        &ref_[idx..idx + query_pattern.len()],
+                        query.len - mismatch,
+                    ) {
+                        *self.data_mut(attr.label, attr.attr).unwrap() = Data::Bool(true);
+
+                        return Ok(());
+                    }
+
+                    break;
+                } else {
+                    break;
                 }
             }
         }
 
         // set the attribute
-        *self.data_mut(attr.label, attr.attr).unwrap() = Data::Bool(!matches.is_empty());
+        *self.data_mut(attr.label, attr.attr).unwrap() = Data::Bool(false);
 
         Ok(())
     }
@@ -564,7 +530,7 @@ impl StrMappings {
         &mut self,
         label: InlineString,
         attr: Attr,
-        seq_map: &HashMap<u64, String>,
+        seq_map: HashMap<Vec<u8>, Vec<u8>>,
         mismatch: usize,
     ) -> Result<(), NameError> {
         // this query is a random kmer
@@ -573,63 +539,43 @@ impl StrMappings {
             .ok_or_else(|| NameError::NotInRead(Name::Label(label)))?
             .clone();
 
-        let threshold = if mismatch > 2 { mismatch + 1 } else { mismatch };
+        let mut matches: Vec<Vec<u8>> = Vec::new();
 
-        let k = (query.len as f64 / (mismatch + 1) as f64).ceil() as usize;
+        let query_pattern = &self.string[query.start..query.len + query.start];
 
-        let mut matches: Vec<&String> = Vec::new();
+        let pattern: uint8x16_t = unsafe { SIMDna::load_pattern(query_pattern) };
 
-        if let Some((_, (query_bits, _), _)) = BitNuclKmer::new(
-            &self.string[query.start..query.len + query.start],
-            query.len as u8,
-            false,
-        )
-        .next()
-        {
-            if mismatch == 0 {
-                if let Some(s) = seq_map.get(&query_bits) {
-                    matches.push(s)
-                }
-            } else {
-                let mut query_kmers: Vec<(usize, u64)> = Vec::new();
+        if mismatch == 0 {
+            // set the attribute
+            if let Some(s) = seq_map.get(query_pattern) {
+                matches.push(s.clone())
+            }
+        } else {
+            for target in seq_map.keys() {
+                let mut start = 0;
 
-                for i in query.start..=query.start + query.len - k {
-                    if let Some((_, (kmer, _), _)) =
-                        BitNuclKmer::new(&self.string[i..i + k], k as u8, false).next()
-                    {
-                        query_kmers.push((i - query.start, kmer))
-                    };
-                }
+                loop {
+                    if let Some(idx) = unsafe { pattern.locate(&target, 3, &mut start) } {
+                        if idx + query.len > target.len() {
+                            break;
+                        }
 
-                for (target, s) in seq_map.iter() {
-                    let kmers_in_target: Vec<(usize, u64)> = query_kmers
-                        .clone()
-                        .into_iter()
-                        .filter(|(i, e)| {
-                            let sre = e << ((query.len - (k + i)) * 2);
-                            let mask: u64 =
-                                (!0 as u64).overflowing_shr(u64::BITS - (k * 2) as u32).0
-                                    << ((query.len - (k + i)) * 2);
-                            target & mask == sre
-                        })
-                        .collect();
+                        if let Some(_) = hamming(
+                            query_pattern,
+                            &target[idx..idx + query_pattern.len()],
+                            query.len - mismatch,
+                        ) {
+                            matches.push(seq_map.get(target).unwrap().clone());
+                        }
 
-                    if kmers_in_target.len() >= threshold
-                        && edit_distance(
-                            *target,
-                            // make the length a multiple of eight
-                            (((u64::BITS - target.leading_zeros()) + 7 & !7) / 2)
-                                .try_into()
-                                .unwrap(),
-                            query_bits,
-                            query.len,
-                        ) <= mismatch
-                    {
-                        matches.push(s)
+                        break;
+                    } else {
+                        break;
                     }
                 }
             }
         }
+
         // downstream handle the many allowable matches
 
         // replace the matched sequence with others
@@ -638,6 +584,8 @@ impl StrMappings {
             let rep_seq = matches.first().unwrap();
 
             let len_dif = query.len as i32 - rep_seq.len() as i32;
+
+            println!("{}", len_dif);
 
             self.mappings.iter_mut().for_each(|m| {
                 use ExtendInterval::*;
@@ -676,10 +624,8 @@ impl StrMappings {
                 }
             }
 
-            self.string.splice(
-                query.start..query.start + rep_seq.len(),
-                rep_seq.as_bytes().to_vec(),
-            );
+            self.string
+                .splice(query.start..query.start + rep_seq.len(), rep_seq.to_vec());
         }
 
         // set the attribute
@@ -1199,7 +1145,7 @@ impl Read {
         str_type: StrType,
         label: InlineString,
         attr: Attr,
-        seq_map: &HashMap<u64, String>,
+        seq_map: HashMap<Vec<u8>, Vec<u8>>,
         mismatch: usize,
     ) -> Result<(), NameError> {
         self.str_mappings_mut(str_type)
@@ -1212,7 +1158,7 @@ impl Read {
         str_type: StrType,
         label: InlineString,
         attr: Attr,
-        allow_list: &Vec<u64>,
+        allow_list: Vec<Vec<u8>>,
         mismatch: usize,
     ) -> Result<(), NameError> {
         self.str_mappings_mut(str_type)
@@ -1391,28 +1337,5 @@ impl fmt::Display for StrType {
             Index1 => write!(f, "index1"),
             Index2 => write!(f, "index2"),
         }
-    }
-}
-
-fn edit_distance(target: u64, t_len: usize, query: u64, q_len: usize) -> usize {
-    if t_len == 0 {
-        return q_len;
-    }
-
-    if q_len == 0 {
-        return t_len;
-    }
-
-    if target & 3 == query & 3 {
-        edit_distance(target >> 2, t_len - 1, query >> 2, q_len - 1)
-    } else {
-        1 + [
-            edit_distance(target >> 2, t_len - 1, query, q_len),
-            edit_distance(target, t_len, query >> 2, q_len - 1),
-            edit_distance(target >> 2, t_len - 1, query >> 2, q_len - 1),
-        ]
-        .into_iter()
-        .min()
-        .unwrap()
     }
 }

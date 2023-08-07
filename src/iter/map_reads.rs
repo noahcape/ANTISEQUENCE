@@ -1,6 +1,5 @@
-use needletail::bitkmer::BitNuclKmer;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
 
 use crate::iter::*;
 
@@ -9,7 +8,7 @@ pub struct MapReads<R: Reads> {
     selector_expr: SelectorExpr,
     label: Label,
     attr: Option<Attr>,
-    seq_map: HashMap<u64, String>,
+    seq_map: HashMap<Vec<u8>, Vec<u8>>,
     mismatch: usize,
 }
 
@@ -19,28 +18,23 @@ struct BCMapRecord {
     rand_hex: String,
 }
 
-pub fn generate_map(seq_map: String) -> HashMap<u64, String> {
+pub fn generate_map<'a>(seq_map: impl AsRef<Path>) -> HashMap<Vec<u8>, Vec<u8>> {
     let mut rdr = csv::ReaderBuilder::new()
         .delimiter(b'\t')
         .comment(Some(b'#'))
         .has_headers(false)
-        .from_path(seq_map.clone())
-        .expect(format!("Could not open file {}", seq_map).as_str()); // create a custom error for this
+        .from_path(seq_map.as_ref())
+        .expect(format!("Could not open file {:?}", seq_map.as_ref()).as_str()); // create a custom error for this
 
-    let mut hm = HashMap::new();
+    let mut hm: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
 
     for result in rdr.deserialize() {
         let record: BCMapRecord = result.expect("could not deseralize map record");
 
-        if let Some((_, (rh, _), _)) = BitNuclKmer::new(
-            record.rand_hex.as_bytes(),
-            record.rand_hex.len() as u8,
-            false,
-        )
-        .next()
-        {
-            hm.insert(rh, record.oligo_dt.clone());
-        }
+        hm.insert(
+            record.rand_hex.as_bytes().to_vec(),
+            record.oligo_dt.as_bytes().to_vec(),
+        );
     }
 
     hm
@@ -51,13 +45,13 @@ impl<R: Reads> MapReads<R> {
         reads: R,
         selector_expr: SelectorExpr,
         transform_expr: TransformExpr,
-        seq_map: String,
+        seq_map: impl AsRef<Path>,
         mismatch: usize,
     ) -> Self {
         transform_expr.check_size(1, 1, "checking length in bounds");
         transform_expr.check_same_str_type("checking length in bounds");
 
-        let seq_map = generate_map(seq_map.clone());
+        let seq_map = generate_map(seq_map);
 
         Self {
             reads,
@@ -95,7 +89,7 @@ impl<R: Reads> Reads for MapReads<R> {
                     self.label.str_type,
                     self.label.label,
                     attr.clone(),
-                    &self.seq_map,
+                    self.seq_map.clone(),
                     self.mismatch,
                 )
                 .map_err(|e| Error::NameError {
