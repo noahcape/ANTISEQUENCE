@@ -2,8 +2,8 @@ use regex::bytes::*;
 
 use thread_local::*;
 
-use crate::inline_string::*;
 use crate::graph::*;
+use crate::inline_string::*;
 
 pub struct MatchRegexNode {
     required_names: Vec<LabelOrAttr>,
@@ -26,10 +26,7 @@ impl MatchRegexNode {
     /// Example `transform_expr`: `tr!(seq1.* -> seq1.*.matched)`.
     /// This will match the regex pattern two `seq1.*` and set `seq1.*.matched` to a boolean
     /// indicating whether the regex matches.
-    pub fn new(
-        transform_expr: TransformExpr,
-        regex: &str,
-    ) -> Self {
+    pub fn new(transform_expr: TransformExpr, regex: &str) -> Self {
         transform_expr.check_size(1, 1, Self::NAME);
         transform_expr.check_same_str_type(Self::NAME);
 
@@ -45,7 +42,9 @@ impl MatchRegexNode {
 
 impl GraphNode for MatchRegexNode {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(mut read) = read else { panic!("Expected some read!") };
+        let Some(mut read) = read else {
+            panic!("Expected some read!")
+        };
 
         let regex = self.regex_local.get_or(|| self.regex.clone());
         let cap_names = regex

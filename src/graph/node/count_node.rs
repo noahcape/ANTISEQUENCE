@@ -14,7 +14,10 @@ impl CountNode {
     /// For each selector expression, count the number of reads where the expression evaluates to
     /// true.
     pub fn new(selector_exprs: Vec<Expr>) -> Self {
-        let required_names = selector_exprs.iter().flat_map(|n| n.required_names()).collect();
+        let required_names = selector_exprs
+            .iter()
+            .flat_map(|n| n.required_names())
+            .collect();
         let counts = (0..selector_exprs.len())
             .map(|_| AtomicUsize::new(0))
             .collect();
@@ -36,7 +39,9 @@ impl CountNode {
 
 impl GraphNode for CountNode {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(read) = read else { panic!("Expected some read!") };
+        let Some(read) = read else {
+            panic!("Expected some read!")
+        };
 
         for (c, n) in self.counts.iter().zip(&self.selector_exprs) {
             if n.eval_bool(&read).map_err(|e| Error::NameError {

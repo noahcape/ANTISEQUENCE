@@ -1,5 +1,5 @@
 use crate::errors::*;
-use crate::expr::{Label, Attr, LabelOrAttr};
+use crate::expr::{Attr, Label, LabelOrAttr};
 use crate::parse_utils::*;
 
 #[derive(Debug, Clone)]

@@ -31,10 +31,7 @@ impl OutputFastqNode {
     /// Output read 1 and read 2 to two separate files whose paths are specified by expressions.
     ///
     /// The reads will be interleaved if the file path expressions are the same.
-    pub fn new2(
-        file_expr1: Expr,
-        file_expr2: Expr,
-    ) -> Self {
+    pub fn new2(file_expr1: Expr, file_expr2: Expr) -> Self {
         let mut required_names = file_expr1.required_names();
         required_names.extend(file_expr2.required_names());
 
@@ -52,9 +49,7 @@ impl OutputFastqNode {
         let mut file_writers = self.file_writers.lock().unwrap();
 
         match file_writers.entry(file_name.to_owned()) {
-            Occupied(e) => {
-                Ok(Arc::clone(e.get()))
-            }
+            Occupied(e) => Ok(Arc::clone(e.get())),
             Vacant(e) => {
                 // need to create the output file
                 let file_path = std::str::from_utf8(file_name).unwrap();
@@ -80,7 +75,9 @@ impl OutputFastqNode {
 
 impl GraphNode for OutputFastqNode {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(read) = read else { panic!("Expected some read!") };
+        let Some(read) = read else {
+            panic!("Expected some read!")
+        };
 
         let file_name1 =
             self.file_expr1
@@ -98,12 +95,12 @@ impl GraphNode for OutputFastqNode {
 
         if let Some(file_expr2) = &self.file_expr2 {
             let file_name2 = file_expr2
-                    .eval_bytes(&read, false)
-                    .map_err(|e| Error::NameError {
-                        source: e,
-                        read: read.clone(),
-                        context: Self::NAME,
-                    })?;
+                .eval_bytes(&read, false)
+                .map_err(|e| Error::NameError {
+                    source: e,
+                    read: read.clone(),
+                    context: Self::NAME,
+                })?;
 
             let locked_writer2 = self.get_writer(&file_name2).map_err(|e| Error::FileIo {
                 file: utf8(&file_name2),

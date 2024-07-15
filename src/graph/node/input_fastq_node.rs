@@ -2,14 +2,14 @@ use needletail::*;
 
 use thread_local::*;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use crate::errors::*;
-use crate::graph::*;
 use crate::expr::LabelOrAttr;
+use crate::graph::*;
 
 const CHUNK_SIZE: usize = 256;
 
@@ -41,9 +41,7 @@ impl<'reader> InputFastq1Node<'reader> {
     }
 
     /// Stream reads created from interleaved paired-end fastq records from an input file.
-    pub fn new_interleaved(
-        file: impl AsRef<str>,
-    ) -> Result<Self> {
+    pub fn new_interleaved(file: impl AsRef<str>) -> Result<Self> {
         let reader = Mutex::new(parse_fastx_file(file.as_ref()).map_err(|e| Error::FileIo {
             file: file.as_ref().to_owned(),
             source: Box::new(e),
@@ -60,7 +58,8 @@ impl<'reader> InputFastq1Node<'reader> {
 
     /// Stream reads created from fastq records from a byte slice.
     pub fn from_bytes(bytes: &'reader [u8]) -> Result<Self> {
-        let reader = Mutex::new(parse_fastx_reader(bytes).map_err(|e| Error::BytesIo(Box::new(e)))?);
+        let reader =
+            Mutex::new(parse_fastx_reader(bytes).map_err(|e| Error::BytesIo(Box::new(e)))?);
 
         Ok(Self {
             reader,
@@ -73,7 +72,8 @@ impl<'reader> InputFastq1Node<'reader> {
 
     /// Stream reads created from interleaved paired-end fastq records from a byte slice.
     pub fn from_interleaved_bytes(bytes: &'reader [u8]) -> Result<Self> {
-        let reader = Mutex::new(parse_fastx_reader(bytes).map_err(|e| Error::BytesIo(Box::new(e)))?);
+        let reader =
+            Mutex::new(parse_fastx_reader(bytes).map_err(|e| Error::BytesIo(Box::new(e)))?);
 
         Ok(Self {
             reader,
@@ -89,7 +89,9 @@ impl<'reader> GraphNode for InputFastq1Node<'reader> {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         assert!(read.is_none(), "Expected no input reads for {}", Self::NAME);
 
-        let buf = self.buf.get_or(|| RefCell::new(VecDeque::with_capacity(CHUNK_SIZE)));
+        let buf = self
+            .buf
+            .get_or(|| RefCell::new(VecDeque::with_capacity(CHUNK_SIZE)));
         let mut b = buf.borrow_mut();
 
         if b.is_empty() {
@@ -184,10 +186,7 @@ impl InputFastq2Node {
     const NAME: &'static str = "InputFastq2Node";
 
     /// Stream reads created from paired-end fastq records from two different input files.
-    pub fn new(
-        file1: impl AsRef<str>,
-        file2: impl AsRef<str>,
-    ) -> Result<Self> {
+    pub fn new(file1: impl AsRef<str>, file2: impl AsRef<str>) -> Result<Self> {
         let reader1 = Mutex::new(parse_fastx_file(file1.as_ref()).map_err(|e| Error::FileIo {
             file: file1.as_ref().to_owned(),
             source: Box::new(e),
@@ -212,7 +211,9 @@ impl GraphNode for InputFastq2Node {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         assert!(read.is_none(), "Expected no input reads for {}", Self::NAME);
 
-        let buf = self.buf.get_or(|| RefCell::new(VecDeque::with_capacity(CHUNK_SIZE)));
+        let buf = self
+            .buf
+            .get_or(|| RefCell::new(VecDeque::with_capacity(CHUNK_SIZE)));
         let mut b = buf.borrow_mut();
 
         if b.is_empty() {
@@ -224,7 +225,10 @@ impl GraphNode for InputFastq2Node {
                     break;
                 };
                 let Some(record2) = reader2.next() else {
-                    Err(Error::UnpairedRead(format!("\"{}\" and \"{}\"", &*self.origin1, &*self.origin2)))?
+                    Err(Error::UnpairedRead(format!(
+                        "\"{}\" and \"{}\"",
+                        &*self.origin1, &*self.origin2
+                    )))?
                 };
 
                 let record1 = record1.map_err(|e| Error::ParseRecord {

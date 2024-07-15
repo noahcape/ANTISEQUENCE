@@ -37,11 +37,7 @@ impl MatchAnyNode {
     /// `tr!(seq1.* -> seq1.before, seq1.aligned, seq1.after)`.
     /// The input labeled interval will get a new attribute (`seq1.*.my_patterns`) that is set to the pattern
     /// that is matched. If no pattern matches, then it will be set to false.
-    pub fn new(
-        transform_expr: TransformExpr,
-        patterns: Patterns,
-        match_type: MatchType,
-    ) -> Self {
+    pub fn new(transform_expr: TransformExpr, patterns: Patterns, match_type: MatchType) -> Self {
         let mut new_labels = [None, None, None];
 
         transform_expr.check_size(1, match_type.num_mappings(), Self::NAME);
@@ -63,7 +59,9 @@ impl MatchAnyNode {
 
 impl GraphNode for MatchAnyNode {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(mut read) = read else { panic!("Expected some read!") };
+        let Some(mut read) = read else {
+            panic!("Expected some read!")
+        };
 
         let string = read
             .substring(self.label.str_type, self.label.label)
@@ -73,22 +71,20 @@ impl GraphNode for MatchAnyNode {
                 context: Self::NAME,
             })?;
 
-        let aligner_cell = self.aligner.get_or(|| {
-            match self.match_type {
-                MatchType::GlobalAln(_) => {
-                    Some(RefCell::new(Box::new(GlobalLocalAligner::<false>::new(string.len() * 2))))
-                }
-                MatchType::LocalAln { .. } => {
-                    Some(RefCell::new(Box::new(GlobalLocalAligner::<true>::new(string.len() * 2))))
-                }
-                MatchType::PrefixAln { .. } => {
-                    Some(RefCell::new(Box::new(PrefixSuffixAligner::<true>::new(string.len() * 2))))
-                }
-                MatchType::SuffixAln { .. } => {
-                    Some(RefCell::new(Box::new(PrefixSuffixAligner::<false>::new(string.len() * 2))))
-                }
-                _ => None,
-            }
+        let aligner_cell = self.aligner.get_or(|| match self.match_type {
+            MatchType::GlobalAln(_) => Some(RefCell::new(Box::new(
+                GlobalLocalAligner::<false>::new(string.len() * 2),
+            ))),
+            MatchType::LocalAln { .. } => Some(RefCell::new(Box::new(
+                GlobalLocalAligner::<true>::new(string.len() * 2),
+            ))),
+            MatchType::PrefixAln { .. } => Some(RefCell::new(Box::new(
+                PrefixSuffixAligner::<true>::new(string.len() * 2),
+            ))),
+            MatchType::SuffixAln { .. } => Some(RefCell::new(Box::new(
+                PrefixSuffixAligner::<false>::new(string.len() * 2),
+            ))),
+            _ => None,
         });
 
         let mut max_matches = 0;
@@ -97,14 +93,11 @@ impl GraphNode for MatchAnyNode {
         let mut max_cut_pos2 = 0;
 
         for pattern in self.patterns.patterns() {
-            let pattern_str_cow =
-                pattern
-                    .get(&read)
-                    .map_err(|e| Error::NameError {
-                        source: e,
-                        read: read.clone(),
-                        context: Self::NAME,
-                    })?;
+            let pattern_str_cow = pattern.get(&read).map_err(|e| Error::NameError {
+                source: e,
+                read: read.clone(),
+                context: Self::NAME,
+            })?;
             let pattern_str: &[u8] = &pattern_str_cow;
             let pattern_len = pattern_str.len();
 
@@ -137,8 +130,9 @@ impl GraphNode for MatchAnyNode {
                         None
                     }
                 }
-                ExactSearch => memmem::find(string, pattern_str)
-                    .map(|i| (pattern_len, i, i + pattern_len)),
+                ExactSearch => {
+                    memmem::find(string, pattern_str).map(|i| (pattern_len, i, i + pattern_len))
+                }
                 Hamming(t) => {
                     let t = t.get(pattern_len);
                     hamming(string, pattern_str, t).map(|m| (m, pattern_len, 0))
@@ -146,8 +140,7 @@ impl GraphNode for MatchAnyNode {
                 HammingPrefix(t) => {
                     if pattern_len <= string.len() {
                         let t = t.get(pattern_len);
-                        hamming(&string[..pattern_len], pattern_str, t)
-                            .map(|m| (m, pattern_len, 0))
+                        hamming(&string[..pattern_len], pattern_str, t).map(|m| (m, pattern_len, 0))
                     } else {
                         None
                     }
@@ -171,13 +164,11 @@ impl GraphNode for MatchAnyNode {
                     .borrow_mut()
                     .align(string, pattern_str, identity, identity)
                     .map(|(m, _, end_idx)| (m, end_idx, 0)),
-                LocalAln { identity, overlap } => {
-                    aligner_cell
-                        .as_ref()
-                        .unwrap()
-                        .borrow_mut()
-                        .align(string, pattern_str, identity, overlap)
-                }
+                LocalAln { identity, overlap } => aligner_cell
+                    .as_ref()
+                    .unwrap()
+                    .borrow_mut()
+                    .align(string, pattern_str, identity, overlap),
                 PrefixAln { identity, overlap } => {
                     let additional =
                         ((1.0 - identity).max(0.0) * (pattern_len as f64)).ceil() as usize;

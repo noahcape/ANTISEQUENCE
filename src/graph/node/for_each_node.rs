@@ -9,15 +9,15 @@ impl<F: Fn(&mut Read) + Send + Sync> ForEachNode<F> {
 
     /// Apply an arbitrary function on each read.
     pub fn new(func: F) -> Self {
-        Self {
-            func,
-        }
+        Self { func }
     }
 }
 
 impl<F: Fn(&mut Read) + Send + Sync> GraphNode for ForEachNode<F> {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(mut read) = read else { panic!("Expected some read!") };
+        let Some(mut read) = read else {
+            panic!("Expected some read!")
+        };
         (self.func)(&mut read);
         Ok((Some(read), false))
     }

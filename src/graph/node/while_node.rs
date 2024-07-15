@@ -22,13 +22,19 @@ impl WhileNode {
 
 impl GraphNode for WhileNode {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(mut read) = read else { panic!("Expected some read!") };
+        let Some(mut read) = read else {
+            panic!("Expected some read!")
+        };
 
-        while self.cond_expr.eval_bool(&read).map_err(|e| Error::NameError {
-            source: e,
-            read: read.clone(),
-            context: Self::NAME,
-        })? {
+        while self
+            .cond_expr
+            .eval_bool(&read)
+            .map_err(|e| Error::NameError {
+                source: e,
+                read: read.clone(),
+                context: Self::NAME,
+            })?
+        {
             let (r, done) = self.graph.run_one(Some(read))?;
 
             if done {

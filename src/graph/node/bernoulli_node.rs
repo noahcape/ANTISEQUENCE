@@ -30,19 +30,19 @@ impl BernoulliNode {
 
 impl GraphNode for BernoulliNode {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(mut read) = read else { panic!("Expected some read!") };
+        let Some(mut read) = read else {
+            panic!("Expected some read!")
+        };
 
         // use the index of the read in the seed for determinism when multithreading
-        let seed = (self.seed << 32)
-            .wrapping_add(read.first_idx() as u64);
+        let seed = (self.seed << 32).wrapping_add(read.first_idx() as u64);
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed);
         let rand_bool = self.bernoulli.sample(&mut rng);
 
         // panic to make borrow checker happy
         *read
             .data_mut(self.attr.str_type, self.attr.label, self.attr.attr)
-            .unwrap_or_else(|e| panic!("Error in {}: {e}", Self::NAME)) =
-            Data::Bool(rand_bool);
+            .unwrap_or_else(|e| panic!("Error in {}: {e}", Self::NAME)) = Data::Bool(rand_bool);
 
         Ok((Some(read), false))
     }

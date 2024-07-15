@@ -15,7 +15,9 @@ impl<B: RangeBounds<usize> + Send + Sync> TakeNode<B> {
 
 impl<B: RangeBounds<usize> + Send + Sync> GraphNode for TakeNode<B> {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(read) = read else { panic!("Expected some read!") };
+        let Some(read) = read else {
+            panic!("Expected some read!")
+        };
         let first_idx = read.first_idx();
 
         if self.bounds.contains(&first_idx) {

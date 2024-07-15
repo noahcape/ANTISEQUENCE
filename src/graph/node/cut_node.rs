@@ -16,10 +16,7 @@ impl CutNode {
     /// The transform expression must have one input label and two output labels.
     ///
     /// Example `transform_expr`: `tr!(seq1.* -> seq1.left, seq1.right)`.
-    pub fn new(
-        transform_expr: TransformExpr,
-        cut_idx: EndIdx,
-    ) -> Self {
+    pub fn new(transform_expr: TransformExpr, cut_idx: EndIdx) -> Self {
         transform_expr.check_size(1, 2, Self::NAME);
         transform_expr.check_same_str_type(Self::NAME);
 
@@ -35,7 +32,9 @@ impl CutNode {
 
 impl GraphNode for CutNode {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(mut read) = read else { panic!("Expected some read!") };
+        let Some(mut read) = read else {
+            panic!("Expected some read!")
+        };
 
         read.cut(
             self.cut_label.str_type,

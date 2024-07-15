@@ -20,7 +20,10 @@ impl IntersectNode {
         transform_expr.check_same_str_type(Self::NAME);
 
         Self {
-            required_names: vec![transform_expr.before(0).into(), transform_expr.before(1).into()],
+            required_names: vec![
+                transform_expr.before(0).into(),
+                transform_expr.before(1).into(),
+            ],
             label1: transform_expr.before(0),
             label2: transform_expr.before(1),
             new_label: transform_expr.after_label(0, Self::NAME),
@@ -30,7 +33,9 @@ impl IntersectNode {
 
 impl GraphNode for IntersectNode {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(mut read) = read else { panic!("Expected some read!") };
+        let Some(mut read) = read else {
+            panic!("Expected some read!")
+        };
 
         read.intersect(
             self.label1.str_type,
@@ -79,7 +84,10 @@ impl UnionNode {
         transform_expr.check_same_str_type(Self::NAME);
 
         Self {
-            required_names: vec![transform_expr.before(0).into(), transform_expr.before(1).into()],
+            required_names: vec![
+                transform_expr.before(0).into(),
+                transform_expr.before(1).into(),
+            ],
             label1: transform_expr.before(0),
             label2: transform_expr.before(1),
             new_label: transform_expr.after_label(0, Self::NAME),
@@ -89,7 +97,9 @@ impl UnionNode {
 
 impl GraphNode for UnionNode {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(mut read) = read else { panic!("Expected some read!") };
+        let Some(mut read) = read else {
+            panic!("Expected some read!")
+        };
 
         read.union(
             self.label1.str_type,

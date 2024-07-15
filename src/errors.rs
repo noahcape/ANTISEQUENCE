@@ -3,7 +3,7 @@ use thiserror;
 use std::fmt;
 
 use crate::inline_string::*;
-use crate::read::{Data, Read, StrType, Origin};
+use crate::read::{Data, Origin, Read, StrType};
 
 pub type Result<T> = std::result::Result<T, Error>;
 

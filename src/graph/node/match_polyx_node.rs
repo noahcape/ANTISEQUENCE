@@ -18,12 +18,7 @@ impl MatchPolyXNode {
     /// The transform expression must have one input label and two output labels.
     ///
     /// Example `transform_expr`: `tr!(seq1.* -> seq1.sequence, seq1.polya_tail)`.
-    pub fn new(
-        transform_expr: TransformExpr,
-        x: u8,
-        end: End,
-        identity: f64,
-    ) -> Self {
+    pub fn new(transform_expr: TransformExpr, x: u8, end: End, identity: f64) -> Self {
         transform_expr.check_size(1, 2, Self::NAME);
         transform_expr.check_same_str_type(Self::NAME);
 
@@ -41,7 +36,9 @@ impl MatchPolyXNode {
 
 impl GraphNode for MatchPolyXNode {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(mut read) = read else { panic!("Expected some read!") };
+        let Some(mut read) = read else {
+            panic!("Expected some read!")
+        };
 
         let string = read
             .substring(self.label.str_type, self.label.label)

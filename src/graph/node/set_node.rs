@@ -21,10 +21,7 @@ impl SetNode {
     ///
     /// If a label is set, then its interval and all other intersecting intervals will be adjusted accordingly
     /// for any shortening or lengthening.
-    pub fn new(
-        label_or_attr: LabelOrAttr,
-        expr: Expr,
-    ) -> Self {
+    pub fn new(label_or_attr: LabelOrAttr, expr: Expr) -> Self {
         Self {
             required_names: vec![label_or_attr.clone()],
             label_or_attr,
@@ -35,17 +32,21 @@ impl SetNode {
 
 impl GraphNode for SetNode {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(mut read) = read else { panic!("Expected some read!") };
+        let Some(mut read) = read else {
+            panic!("Expected some read!")
+        };
 
         match &self.label_or_attr {
             LabelOrAttr::Label(label) => {
-                let new_bytes = self.expr
+                let new_bytes = self
+                    .expr
                     .eval_bytes(&read, false)
                     .map_err(|e| Error::NameError {
                         source: e,
                         read: read.clone(),
                         context: Self::NAME,
-                    })?.into_owned();
+                    })?
+                    .into_owned();
 
                 let str_mappings =
                     read.str_mappings(label.str_type)
@@ -56,14 +57,15 @@ impl GraphNode for SetNode {
                         })?;
 
                 if str_mappings.qual().is_some() {
-                    let new_qual =
-                        self.expr
-                            .eval_bytes(&read, true)
-                            .map_err(|e| Error::NameError {
-                                source: e,
-                                read: read.clone(),
-                                context: Self::NAME,
-                            })?.into_owned();
+                    let new_qual = self
+                        .expr
+                        .eval_bytes(&read, true)
+                        .map_err(|e| Error::NameError {
+                            source: e,
+                            read: read.clone(),
+                            context: Self::NAME,
+                        })?
+                        .into_owned();
 
                     read.set(label.str_type, label.label, &new_bytes, Some(&new_qual))
                         .map_err(|e| Error::NameError {
@@ -81,13 +83,11 @@ impl GraphNode for SetNode {
                 }
             }
             LabelOrAttr::Attr(attr) => {
-                let new_val = self.expr
-                    .eval(&read, false)
-                    .map_err(|e| Error::NameError {
-                        source: e,
-                        read: read.clone(),
-                        context: Self::NAME,
-                    })?;
+                let new_val = self.expr.eval(&read, false).map_err(|e| Error::NameError {
+                    source: e,
+                    read: read.clone(),
+                    context: Self::NAME,
+                })?;
 
                 // panic to make borrow checker happy
                 *read

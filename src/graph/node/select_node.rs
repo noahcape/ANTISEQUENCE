@@ -22,13 +22,19 @@ impl SelectNode {
 
 impl GraphNode for SelectNode {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(read) = read else { panic!("Expected some read!") };
+        let Some(read) = read else {
+            panic!("Expected some read!")
+        };
 
-        if self.selector_expr.eval_bool(&read).map_err(|e| Error::NameError {
-            source: e,
-            read: read.clone(),
-            context: Self::NAME,
-        })? {
+        if self
+            .selector_expr
+            .eval_bool(&read)
+            .map_err(|e| Error::NameError {
+                source: e,
+                read: read.clone(),
+                context: Self::NAME,
+            })?
+        {
             self.graph.run_one(Some(read))
         } else {
             Ok((Some(read), false))

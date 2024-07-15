@@ -458,7 +458,7 @@ impl Read {
                         }
                     }
                     return false;
-                },
+                }
                 crate::expr::LabelOrAttr::Attr(a) => {
                     if let Some(s) = self.str_mappings(a.str_type) {
                         if let Some(_) = s.data(a.label, a.attr) {
@@ -466,7 +466,7 @@ impl Read {
                         }
                     }
                     return false;
-                },
+                }
             }
         }
 

@@ -1,9 +1,9 @@
 use std::borrow::Cow;
 
 use crate::errors::*;
+use crate::expr::*;
 use crate::inline_string::*;
 use crate::read::*;
-use crate::expr::*;
 
 pub struct Patterns {
     pattern_name: Option<InlineString>,
@@ -40,10 +40,17 @@ impl Patterns {
         }
     }
 
-    pub fn new(pattern_name: impl AsRef<[u8]>, attr_names: Vec<impl AsRef<[u8]>>, patterns: Vec<Pattern>) -> Self {
+    pub fn new(
+        pattern_name: impl AsRef<[u8]>,
+        attr_names: Vec<impl AsRef<[u8]>>,
+        patterns: Vec<Pattern>,
+    ) -> Self {
         Self {
             pattern_name: Some(InlineString::new(pattern_name.as_ref())),
-            attr_names: attr_names.into_iter().map(|v| InlineString::new(v.as_ref())).collect(),
+            attr_names: attr_names
+                .into_iter()
+                .map(|v| InlineString::new(v.as_ref()))
+                .collect(),
             patterns,
         }
     }
