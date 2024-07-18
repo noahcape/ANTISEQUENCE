@@ -12,7 +12,9 @@ impl TrimNode {
     ///
     /// When an interval is trimmed, its length will be set to zero. All intersecting
     /// intervals will also be adjusted accordingly for the shortening.
-    pub fn new(labels: Vec<Label>) -> Self {
+    pub fn new(labels: impl IntoIterator<Item = Label>) -> Self {
+        let labels = labels.into_iter().collect::<Vec<_>>();
+
         Self {
             required_names: labels.iter().cloned().map(|l| l.into()).collect(),
             labels,

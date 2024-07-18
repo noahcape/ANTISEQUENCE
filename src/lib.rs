@@ -14,7 +14,7 @@
 //! and add them to a [`Graph`]. Then, you run the graph, which executes all the operations on each
 //! read.
 //!
-//! See [`graph::node`] for all supported operations.
+//! See [`node`] for all supported operations.
 //!
 //! TODO: update docs below
 //!
@@ -86,9 +86,9 @@
 
 pub mod errors;
 pub mod expr;
-pub mod graph;
-pub mod patterns;
-pub mod read;
+mod graph;
+mod patterns;
+mod read;
 
 mod inline_string;
 mod parse_utils;

@@ -667,6 +667,126 @@ impl ExprNode for Data {
     }
 }
 
+impl ExprNode for &str {
+    fn eval<'a>(
+        &'a self,
+        _read: &'a Read,
+        use_qual: bool,
+    ) -> std::result::Result<EvalData<'a>, NameError> {
+        if use_qual {
+            Ok(EvalData::Bytes(Cow::Owned(vec![UNKNOWN_QUAL; self.len()])))
+        } else {
+            Ok(EvalData::Bytes(Cow::Borrowed(self.as_bytes())))
+        }
+    }
+
+    fn required_names(&self) -> Vec<LabelOrAttr> {
+        Vec::new()
+    }
+}
+
+impl ExprNode for String {
+    fn eval<'a>(
+        &'a self,
+        _read: &'a Read,
+        use_qual: bool,
+    ) -> std::result::Result<EvalData<'a>, NameError> {
+        if use_qual {
+            Ok(EvalData::Bytes(Cow::Owned(vec![UNKNOWN_QUAL; self.len()])))
+        } else {
+            Ok(EvalData::Bytes(Cow::Borrowed(self.as_bytes())))
+        }
+    }
+
+    fn required_names(&self) -> Vec<LabelOrAttr> {
+        Vec::new()
+    }
+}
+
+impl ExprNode for &[u8] {
+    fn eval<'a>(
+        &'a self,
+        _read: &'a Read,
+        use_qual: bool,
+    ) -> std::result::Result<EvalData<'a>, NameError> {
+        if use_qual {
+            Ok(EvalData::Bytes(Cow::Owned(vec![UNKNOWN_QUAL; self.len()])))
+        } else {
+            Ok(EvalData::Bytes(Cow::Borrowed(self)))
+        }
+    }
+
+    fn required_names(&self) -> Vec<LabelOrAttr> {
+        Vec::new()
+    }
+}
+
+impl ExprNode for Vec<u8> {
+    fn eval<'a>(
+        &'a self,
+        _read: &'a Read,
+        use_qual: bool,
+    ) -> std::result::Result<EvalData<'a>, NameError> {
+        if use_qual {
+            Ok(EvalData::Bytes(Cow::Owned(vec![UNKNOWN_QUAL; self.len()])))
+        } else {
+            Ok(EvalData::Bytes(Cow::Borrowed(&self)))
+        }
+    }
+
+    fn required_names(&self) -> Vec<LabelOrAttr> {
+        Vec::new()
+    }
+}
+
+impl ExprNode for usize {
+    fn eval<'a>(
+        &'a self,
+        _read: &'a Read,
+        _use_qual: bool,
+    ) -> std::result::Result<EvalData<'a>, NameError> {
+        Ok(EvalData::Int(*self as isize))
+    }
+
+    fn required_names(&self) -> Vec<LabelOrAttr> {
+        Vec::new()
+    }
+}
+
+impl ExprNode for isize {
+    fn eval<'a>(
+        &'a self,
+        _read: &'a Read,
+        _use_qual: bool,
+    ) -> std::result::Result<EvalData<'a>, NameError> {
+        Ok(EvalData::Int(*self))
+    }
+
+    fn required_names(&self) -> Vec<LabelOrAttr> {
+        Vec::new()
+    }
+}
+
+impl ExprNode for bool {
+    fn eval<'a>(
+        &'a self,
+        _read: &'a Read,
+        _use_qual: bool,
+    ) -> std::result::Result<EvalData<'a>, NameError> {
+        Ok(EvalData::Bool(*self))
+    }
+
+    fn required_names(&self) -> Vec<LabelOrAttr> {
+        Vec::new()
+    }
+}
+
+impl<T: ExprNode + Send + Sync + 'static> From<T> for Expr {
+    fn from(v: T) -> Self {
+        Expr { node: Box::new(v) }
+    }
+}
+
 #[derive(Debug)]
 pub enum EvalData<'a> {
     Bool(bool),

@@ -1,57 +1,58 @@
-/// Graph nodes that process reads.
-pub mod cut_node;
+//! Graph nodes that process reads.
+
+mod cut_node;
 pub use cut_node::*;
 
-pub mod bernoulli_node;
+mod bernoulli_node;
 pub use bernoulli_node::*;
 
-pub mod time_node;
+mod time_node;
 pub use time_node::*;
 
-pub mod trim_node;
+mod trim_node;
 pub use trim_node::*;
 
-pub mod count_node;
+mod count_node;
 pub use count_node::*;
 
-pub mod take_node;
+mod take_node;
 pub use take_node::*;
 
-pub mod set_node;
+mod set_node;
 pub use set_node::*;
 
-pub mod for_each_node;
+mod for_each_node;
 pub use for_each_node::*;
 
-pub mod retain_node;
+mod retain_node;
 pub use retain_node::*;
 
-pub mod intersect_union_node;
+mod intersect_union_node;
 pub use intersect_union_node::*;
 
-pub mod fork_node;
+mod fork_node;
 pub use fork_node::*;
 
-pub mod match_polyx_node;
+mod match_polyx_node;
 pub use match_polyx_node::*;
 
-pub mod match_regex_node;
+mod match_regex_node;
 pub use match_regex_node::*;
 
-pub mod match_any_node;
+mod match_any_node;
 pub use match_any_node::*;
 
-pub mod input_fastq_node;
+mod input_fastq_node;
 pub use input_fastq_node::*;
 
-pub mod output_fastq_node;
+mod output_fastq_node;
 pub use output_fastq_node::*;
 
-pub mod select_node;
+mod select_node;
 pub use select_node::*;
 
-pub mod try_node;
+mod try_node;
 pub use try_node::*;
 
-pub mod while_node;
+mod while_node;
 pub use while_node::*;

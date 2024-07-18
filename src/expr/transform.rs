@@ -9,10 +9,13 @@ pub struct TransformExpr {
 }
 
 impl TransformExpr {
-    pub fn new(before: impl AsRef<[Label]>, after: impl AsRef<[Option<LabelOrAttr>]>) -> Self {
+    pub fn new(
+        before: impl IntoIterator<Item = Label>,
+        after: impl IntoIterator<Item = Option<LabelOrAttr>>,
+    ) -> Self {
         Self {
-            before: before.as_ref().to_owned(),
-            after: after.as_ref().to_owned(),
+            before: before.into_iter().collect(),
+            after: after.into_iter().collect(),
         }
     }
 

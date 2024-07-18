@@ -19,7 +19,9 @@ impl OutputFastqNode {
     const NAME: &'static str = "OutputFastqNode";
 
     /// Output reads (read 1 only) to a file whose path is specified by an expression.
-    pub fn new1(file_expr: Expr) -> Self {
+    pub fn new1(file_expr: impl Into<Expr>) -> Self {
+        let file_expr = file_expr.into();
+
         Self {
             required_names: file_expr.required_names(),
             file_expr1: file_expr,
@@ -31,7 +33,9 @@ impl OutputFastqNode {
     /// Output read 1 and read 2 to two separate files whose paths are specified by expressions.
     ///
     /// The reads will be interleaved if the file path expressions are the same.
-    pub fn new2(file_expr1: Expr, file_expr2: Expr) -> Self {
+    pub fn new2(file_expr1: impl Into<Expr>, file_expr2: impl Into<Expr>) -> Self {
+        let file_expr1 = file_expr1.into();
+        let file_expr2 = file_expr2.into();
         let mut required_names = file_expr1.required_names();
         required_names.extend(file_expr2.required_names());
 
