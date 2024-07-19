@@ -12,7 +12,7 @@ pub struct Patterns {
 }
 
 impl Patterns {
-    pub fn from_strs(patterns: Vec<impl AsRef<[u8]>>) -> Self {
+    pub fn from_strs(patterns: impl IntoIterator<Item = impl AsRef<[u8]>>) -> Self {
         Self {
             pattern_name: None,
             attr_names: Vec::new(),
@@ -26,7 +26,7 @@ impl Patterns {
         }
     }
 
-    pub fn from_exprs(patterns: Vec<Expr>) -> Self {
+    pub fn from_exprs(patterns: impl IntoIterator<Item = Expr>) -> Self {
         Self {
             pattern_name: None,
             attr_names: Vec::new(),
@@ -42,8 +42,8 @@ impl Patterns {
 
     pub fn new(
         pattern_name: impl AsRef<[u8]>,
-        attr_names: Vec<impl AsRef<[u8]>>,
-        patterns: Vec<Pattern>,
+        attr_names: impl IntoIterator<Item = impl AsRef<[u8]>>,
+        patterns: impl IntoIterator<Item = Pattern>,
     ) -> Self {
         Self {
             pattern_name: Some(InlineString::new(pattern_name.as_ref())),
@@ -51,7 +51,7 @@ impl Patterns {
                 .into_iter()
                 .map(|v| InlineString::new(v.as_ref()))
                 .collect(),
-            patterns,
+            patterns: patterns.into_iter().collect(),
         }
     }
 

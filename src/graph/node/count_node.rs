@@ -13,7 +13,11 @@ impl CountNode {
 
     /// For each selector expression, count the number of reads where the expression evaluates to
     /// true.
-    pub fn new(selector_exprs: Vec<Expr>) -> Self {
+    pub fn new(selector_exprs: impl IntoIterator<Item = impl Into<Expr>>) -> Self {
+        let selector_exprs = selector_exprs
+            .into_iter()
+            .map(|e| e.into())
+            .collect::<Vec<_>>();
         let required_names = selector_exprs
             .iter()
             .flat_map(|n| n.required_names())

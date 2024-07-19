@@ -9,7 +9,8 @@ impl RetainNode {
     const NAME: &'static str = "RetainNode";
 
     /// Retain only the reads where the selector expression evaluates to true and discard the rest.
-    pub fn new(selector_expr: Expr) -> Self {
+    pub fn new(selector_expr: impl Into<Expr>) -> Self {
+        let selector_expr = selector_expr.into();
         Self {
             required_names: selector_expr.required_names(),
             selector_expr,

@@ -21,8 +21,9 @@ impl SetNode {
     ///
     /// If a label is set, then its interval and all other intersecting intervals will be adjusted accordingly
     /// for any shortening or lengthening.
-    pub fn new(label_or_attr: impl Into<LabelOrAttr>, expr: Expr) -> Self {
+    pub fn new(label_or_attr: impl Into<LabelOrAttr>, expr: impl Into<Expr>) -> Self {
         let label_or_attr = label_or_attr.into();
+        let expr = expr.into();
 
         Self {
             required_names: vec![label_or_attr.clone()],

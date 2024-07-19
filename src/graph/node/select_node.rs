@@ -10,7 +10,8 @@ impl SelectNode {
     const NAME: &'static str = "SelectNode";
 
     /// Run the graph only on reads where the selector expression evaluates to true.
-    pub fn new(selector_expr: Expr, graph: Graph) -> Self {
+    pub fn new(selector_expr: impl Into<Expr>, graph: Graph) -> Self {
+        let selector_expr = selector_expr.into();
         let required_names = selector_expr.required_names();
         Self {
             required_names,

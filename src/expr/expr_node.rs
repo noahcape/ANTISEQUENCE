@@ -429,10 +429,10 @@ impl ExprNode for ConcatNode {
     }
 }
 
-pub fn concat_all(nodes: impl IntoIterator<Item = Expr>) -> Expr {
+pub fn concat_all(nodes: impl IntoIterator<Item = impl Into<Expr>>) -> Expr {
     Expr {
         node: Box::new(ConcatAllNode {
-            nodes: nodes.into_iter().collect(),
+            nodes: nodes.into_iter().map(|e| e.into()).collect(),
         }),
     }
 }
@@ -585,10 +585,10 @@ impl ExprNode for Attr {
     }
 }
 
-pub fn label_exists(name: impl AsRef<str>) -> Expr {
+pub fn label_exists(name: impl AsRef<[u8]>) -> Expr {
     Expr {
         node: Box::new(LabelExistsNode {
-            label: Label::new(name.as_ref().as_bytes()).unwrap_or_else(|e| panic!("{e}")),
+            label: Label::new(name.as_ref()).unwrap_or_else(|e| panic!("{e}")),
         }),
     }
 }
@@ -613,10 +613,10 @@ impl ExprNode for LabelExistsNode {
     }
 }
 
-pub fn attr_exists(name: impl AsRef<str>) -> Expr {
+pub fn attr_exists(name: impl AsRef<[u8]>) -> Expr {
     Expr {
         node: Box::new(AttrExistsNode {
-            attr: Attr::new(name.as_ref().as_bytes()).unwrap_or_else(|e| panic!("{e}")),
+            attr: Attr::new(name.as_ref()).unwrap_or_else(|e| panic!("{e}")),
         }),
     }
 }

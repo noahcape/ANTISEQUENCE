@@ -10,7 +10,11 @@ fn main() {
     g.add(DbgNode::new());
     g.add(SetNode::new(
         label("name1.*"),
-        concat_all([label("name1.*").into(), "_".into(), label("seq1.a").into()]),
+        concat_all([
+            Expr::from(label("name1.*")),
+            Expr::from("_"),
+            Expr::from(label("seq1.a")),
+        ]),
     ));
     g.add(TrimNode::new([label("seq1.a")]));
     g.add(DbgNode::new());

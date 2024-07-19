@@ -10,7 +10,8 @@ impl WhileNode {
     const NAME: &'static str = "WhileNode";
 
     /// Run a read through the graph multiple times, while the condition expression evaluates to true.
-    pub fn new(cond_expr: Expr, graph: Graph) -> Self {
+    pub fn new(cond_expr: impl Into<Expr>, graph: Graph) -> Self {
+        let cond_expr = cond_expr.into();
         let required_names = cond_expr.required_names();
         Self {
             required_names,
