@@ -15,11 +15,11 @@ pub struct Expr {
 
 macro_rules! binary_fn {
     ($fn_name:ident, $struct_name:ident) => {
-        pub fn $fn_name(self, o: Expr) -> Expr {
+        pub fn $fn_name(self, o: impl Into<Expr>) -> Expr {
             Expr {
                 node: Box::new($struct_name {
                     left: self,
-                    right: o,
+                    right: o.into(),
                 }),
             }
         }
@@ -61,11 +61,11 @@ impl Expr {
     unary_fn!(float, FloatNode, convert);
     unary_fn!(bytes, BytesNode, convert);
 
-    pub fn repeat(self, times: Expr) -> Expr {
+    pub fn repeat(self, times: impl Into<Expr>) -> Expr {
         Expr {
             node: Box::new(RepeatNode {
                 string: self,
-                times,
+                times: times.into(),
             }),
         }
     }
@@ -739,50 +739,36 @@ impl ExprNode for Vec<u8> {
     }
 }
 
-impl ExprNode for usize {
-    fn eval<'a>(
-        &'a self,
-        _read: &'a Read,
-        _use_qual: bool,
-    ) -> std::result::Result<EvalData<'a>, NameError> {
-        Ok(EvalData::Int(*self as isize))
-    }
+macro_rules! impl_expr_node {
+    ($type_name:ident, $eval_data_variant:ident) => {
+        impl ExprNode for $type_name {
+            fn eval<'a>(
+                &'a self,
+                _read: &'a Read,
+                _use_qual: bool,
+            ) -> std::result::Result<EvalData<'a>, NameError> {
+                Ok(EvalData::$eval_data_variant(*self as _))
+            }
 
-    fn required_names(&self) -> Vec<LabelOrAttr> {
-        Vec::new()
-    }
+            fn required_names(&self) -> Vec<LabelOrAttr> {
+                Vec::new()
+            }
+        }
+    };
 }
 
-impl ExprNode for isize {
-    fn eval<'a>(
-        &'a self,
-        _read: &'a Read,
-        _use_qual: bool,
-    ) -> std::result::Result<EvalData<'a>, NameError> {
-        Ok(EvalData::Int(*self))
-    }
+impl_expr_node!(usize, Int);
+impl_expr_node!(isize, Int);
+impl_expr_node!(u64, Int);
+impl_expr_node!(i64, Int);
+impl_expr_node!(u32, Int);
+impl_expr_node!(i32, Int);
+impl_expr_node!(bool, Bool);
+impl_expr_node!(f64, Float);
+impl_expr_node!(f32, Float);
 
-    fn required_names(&self) -> Vec<LabelOrAttr> {
-        Vec::new()
-    }
-}
-
-impl ExprNode for bool {
-    fn eval<'a>(
-        &'a self,
-        _read: &'a Read,
-        _use_qual: bool,
-    ) -> std::result::Result<EvalData<'a>, NameError> {
-        Ok(EvalData::Bool(*self))
-    }
-
-    fn required_names(&self) -> Vec<LabelOrAttr> {
-        Vec::new()
-    }
-}
-
-impl<T: ExprNode + Send + Sync + 'static> From<T> for Expr {
-    fn from(v: T) -> Self {
+impl<E: ExprNode + Send + Sync + 'static> From<E> for Expr {
+    fn from(v: E) -> Self {
         Expr { node: Box::new(v) }
     }
 }

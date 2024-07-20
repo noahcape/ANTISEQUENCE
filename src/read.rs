@@ -747,7 +747,18 @@ impl fmt::Display for StrMappings {
                 c[m.start + m.len - 1] = b'|';
                 String::from_utf8(c).unwrap()
             };
-            write!(f, " {: <len$} {}", m.label.to_string().bold(), curr)?;
+
+            if m.label.bytes().next() == Some(b'_') {
+                // internal
+                write!(
+                    f,
+                    " {: <len$} {}",
+                    m.label.to_string().bold().dimmed(),
+                    curr.dimmed()
+                )?;
+            } else {
+                write!(f, " {: <len$} {}", m.label.to_string().bold(), curr)?;
+            }
 
             for (k, v) in &m.data {
                 write!(f, " {}={}", k.to_string().bold(), v)?;
