@@ -63,14 +63,14 @@ AAAATTTTCCCCGGGGATATAT
 
     // filter out invalid reads
     g.add(RetainNode::new(
-        Expr::from(label("seq1.bc1"))
-            .len()
-            .in_bounds(Expr::from(9)..=Expr::from(11))
+        label_exists("seq1.bc1")
+            .and(label_exists("seq1.bc2"))
             .and(
-                Expr::from(label("seq1.bc2"))
+                Expr::from(label("seq1.bc1"))
                     .len()
-                    .in_bounds(Expr::from(10)..=Expr::from(10)),
-            ),
+                    .in_bounds(Expr::from(9)..=Expr::from(11)),
+            )
+            .and(Expr::from(label("seq1.bc2")).len().eq(10)),
     ));
 
     // move the UMI and barcodes to the read name
