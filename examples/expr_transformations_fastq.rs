@@ -4,11 +4,11 @@ use antisequence::*;
 
 fn main() {
     let fastq = b"@read1/1
-AAAAACCCTTTTT
+AAAAACCATTTTT
 +
 0123456789012
 @read1/2
-AAAAACCCTTTTT
+AAAAACCATTTTT
 +
 0123456789012";
 
@@ -17,9 +17,10 @@ AAAAACCCTTTTT
 
     g.add(CutNode::new(tr!(seq1.* -> seq1.a, seq1.b), LeftEnd(5)));
     g.add(CutNode::new(tr!(seq1.b -> seq1.mid, seq1.bb), LeftEnd(3)));
+    g.add(SetNode::new(label("seq1.mid"), Expr::from(label("seq1.mid")).rev()));
     g.add(SetNode::new(
         label("seq1.mid"),
-        Expr::from(label("seq1.mid")).slice(Expr::from(0)..=Expr::from(-1)),
+        Expr::from(label("seq1.mid")).slice(Expr::from(1)..),
     ));
     g.add(DbgNode::new());
     g.add(OutputFastqNode::new1("example_output/simple.fastq"));
