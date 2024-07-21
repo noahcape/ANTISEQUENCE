@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::marker::{Send, Sync};
-use std::ops::{Bound, Deref, RangeBounds};
+use std::ops::{Bound, RangeBounds};
 
 use crate::errors::NameError;
 use crate::expr::*;
@@ -88,6 +88,24 @@ impl Expr {
             node: Box::new(SliceNode {
                 string: self,
                 range,
+            }),
+        }
+    }
+
+    pub fn revcomp_rna(self) -> Expr {
+        Expr {
+            node: Box::new(RevCompNode {
+                string: self,
+                is_rna: true,
+            }),
+        }
+    }
+
+    pub fn revcomp(self) -> Expr {
+        Expr {
+            node: Box::new(RevCompNode {
+                string: self,
+                is_rna: false,
             }),
         }
     }
@@ -273,6 +291,55 @@ impl ExprNode for EqNode {
         let mut res = self.left.required_names();
         res.append(&mut self.right.required_names());
         res
+    }
+}
+
+struct RevCompNode {
+    string: Expr,
+    is_rna: bool,
+}
+
+impl ExprNode for RevCompNode {
+    fn eval<'a>(
+        &'a self,
+        read: &'a Read,
+        use_qual: bool,
+    ) -> std::result::Result<EvalData<'a>, NameError> {
+        let string = self.string.eval(read, use_qual)?;
+
+        use EvalData::*;
+        match string {
+            Bytes(b) => {
+                let b = if self.is_rna {
+                    b.into_iter()
+                        .map(|e| match e {
+                            b'A' => b'U',
+                            b'U' => b'A',
+                            b'G' => b'C',
+                            b'C' => b'G',
+                            b => *b,
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    b.into_iter()
+                        .map(|e| match e {
+                            b'A' => b'T',
+                            b'T' => b'A',
+                            b'G' => b'C',
+                            b'C' => b'G',
+                            b => *b,
+                        })
+                        .collect::<Vec<_>>()
+                };
+
+                Ok(Bytes(Cow::Owned(b)))
+            }
+            b => Err(NameError::Type("bytes", vec![b.to_data()])),
+        }
+    }
+
+    fn required_names(&self) -> Vec<LabelOrAttr> {
+        self.string.required_names()
     }
 }
 
