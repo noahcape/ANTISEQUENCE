@@ -110,12 +110,13 @@ impl Expr {
         }
     }
 
-    pub fn pad(self, pad_char: Expr, end_idx: EndIdx) -> Expr {
+    pub fn pad(self, pad_char: Expr, num: Expr, end: End) -> Expr {
         Expr {
             node: Box::new(PadNode {
                 string: self,
                 pad_char,
-                end_idx,
+                num,
+                end,
             }),
         }
     }
@@ -307,7 +308,8 @@ impl ExprNode for EqNode {
 struct PadNode {
     string: Expr,
     pad_char: Expr,
-    end_idx: EndIdx,
+    num: Expr,
+    end: End,
 }
 
 impl ExprNode for PadNode {
@@ -318,6 +320,7 @@ impl ExprNode for PadNode {
     ) -> std::result::Result<EvalData<'a>, NameError> {
         let string = self.string.eval(read, use_qual)?;
         let pad_char = self.pad_char.eval(read, use_qual)?;
+        let num = self.num.eval(read, use_qual)?;
 
         use EvalData::*;
         let string = match string {
@@ -325,31 +328,33 @@ impl ExprNode for PadNode {
             b => return Err(NameError::Type("bytes", vec![b.to_data()])),
         };
 
-        match self.end_idx {
-            RightEnd(n) | LeftEnd(n) => {
-                if string.len() >= n {
+        let num = match num {
+            Int(n) => {
+                if string.len() as isize > n {
                     return Err(NameError::Type(
                         "usize longer than interval length",
-                        vec![Data::Int(n as isize)],
+                        vec![num.to_data()],
                     ));
                 }
+                n as usize
             }
-        }
+            n => return Err(NameError::Type("int", vec![n.to_data()])),
+        };
 
         let pad_char = match pad_char {
             Bytes(b) => b,
             b => return Err(NameError::Type("bytes", vec![b.to_data()])),
         };
 
-        let padded = match self.end_idx {
-            LeftEnd(n) => {
-                let mut padded = pad_char.repeat(n - string.len());
+        let padded = match self.end {
+            Left => {
+                let mut padded = pad_char.repeat(num - string.len());
                 padded.append(&mut string.to_vec());
                 padded
             }
-            RightEnd(n) => {
+            Right => {
                 let mut padded = string.to_vec();
-                padded.append(&mut pad_char.repeat(n - string.len()));
+                padded.append(&mut pad_char.repeat(num - string.len()));
                 padded
             }
         };
