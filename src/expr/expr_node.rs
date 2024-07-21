@@ -8,6 +8,9 @@ use crate::read::*;
 
 const UNKNOWN_QUAL: u8 = b'I';
 
+// Default DNA
+pub const NUC_MAP: [u8; 4] = [b'A', b'C', b'T', b'G'];
+
 /// One node in an expression tree.
 pub struct Expr {
     node: Box<dyn ExprNode + Send + Sync>,
@@ -34,6 +37,10 @@ macro_rules! unary_fn {
             }
         }
     };
+}
+
+pub fn log4_roundup(n: usize) -> usize {
+    std::ops::Div::div((usize::BITS - n.leading_zeros()) as f64, 2.0).ceil() as usize
 }
 
 impl Expr {
@@ -117,6 +124,15 @@ impl Expr {
                 pad_char,
                 num,
                 end,
+            }),
+        }
+    }
+
+    pub fn normalize(self, range: impl RangeBounds<Expr> + Send + Sync + 'static) -> Expr {
+        Expr {
+            node: Box::new(NormalizeNode {
+                string: self,
+                range,
             }),
         }
     }
@@ -301,6 +317,111 @@ impl ExprNode for EqNode {
     fn required_names(&self) -> Vec<LabelOrAttr> {
         let mut res = self.left.required_names();
         res.append(&mut self.right.required_names());
+        res
+    }
+}
+
+struct NormalizeNode<R> {
+    string: Expr,
+    range: R,
+}
+
+impl<R: RangeBounds<Expr> + Send + Sync> ExprNode for NormalizeNode<R> {
+    fn eval<'a>(
+        &'a self,
+        read: &'a Read,
+        use_qual: bool,
+    ) -> std::result::Result<EvalData<'a>, NameError> {
+        let string = self.string.eval(read, use_qual)?;
+
+        use EvalData::*;
+        let string = match string {
+            Bytes(b) => b,
+            b => return Err(NameError::Type("bytes", vec![b.to_data()])),
+        };
+
+        let mut start_add1 = false;
+        let start = match self.range.start_bound() {
+            Bound::Included(s) => s.eval(read, use_qual)?,
+            Bound::Excluded(s) => {
+                start_add1 = true;
+                s.eval(read, use_qual)?
+            }
+            Bound::Unbounded => {
+                return Err(NameError::Type(
+                    "inclusive or exclusive bounds",
+                    vec![Data::Int(std::isize::MIN)],
+                ))
+            }
+        };
+
+        let mut end_sub1 = false;
+        let end = match self.range.end_bound() {
+            Bound::Included(e) => e.eval(read, use_qual)?,
+            Bound::Excluded(e) => {
+                end_sub1 = true;
+                e.eval(read, use_qual)?
+            }
+            Bound::Unbounded => {
+                return Err(NameError::Type(
+                    "inclusive or exclusive bounds",
+                    vec![Data::Int(std::isize::MAX)],
+                ))
+            }
+        };
+
+        let (start, end) = match (start, end) {
+            (Int(mut s), Int(mut e)) => {
+                if start_add1 {
+                    s += 1;
+                }
+
+                if end_sub1 {
+                    e -= 1;
+                }
+
+                (s, e)
+            }
+            (s, e) => return Err(NameError::Type("both int", vec![s.to_data(), e.to_data()])),
+        };
+
+        if end < string.len() as isize {
+            return Err(NameError::Type(
+                "range end to exceed length of interval",
+                vec![Data::Int(end)],
+            ));
+        }
+
+        let mut length_diff = end as usize - string.len();
+        let extra_len = log4_roundup((end - start + 1) as usize);
+
+        let mut buff = [b'A'].repeat(length_diff);
+        let mut variable_seg = [b'0'].repeat(extra_len);
+
+        for i in 0..extra_len {
+            let nuc = NUC_MAP.get(length_diff & (usize::MAX & 3)).unwrap();
+            length_diff >>= 2;
+
+            variable_seg[i] = *nuc;
+        }
+
+        let mut normalized = string.to_vec();
+        normalized.append(&mut buff);
+        normalized.append(&mut variable_seg);
+
+        Ok(Bytes(Cow::Owned(normalized)))
+    }
+
+    fn required_names(&self) -> Vec<LabelOrAttr> {
+        let mut res = self.string.required_names();
+        match self.range.start_bound() {
+            Bound::Included(s) | Bound::Excluded(s) => res.append(&mut s.required_names()),
+            _ => (),
+        }
+        match self.range.end_bound() {
+            Bound::Included(e) | Bound::Excluded(e) => res.append(&mut e.required_names()),
+            _ => (),
+        }
         res
     }
 }
