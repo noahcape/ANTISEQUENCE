@@ -82,6 +82,15 @@ impl Expr {
         }
     }
 
+    pub fn slice(self, range: impl RangeBounds<Expr> + Send + Sync + 'static) -> Expr {
+        Expr {
+            node: Box::new(SliceNode {
+                string: self,
+                range,
+            }),
+        }
+    }
+
     pub fn eval_bool<'a>(&'a self, read: &'a Read) -> std::result::Result<bool, NameError> {
         let res = self.eval(read, false)?;
 
@@ -470,6 +479,90 @@ impl ExprNode for ConcatAllNode {
 
     fn required_names(&self) -> Vec<LabelOrAttr> {
         self.nodes.iter().flat_map(|n| n.required_names()).collect()
+    }
+}
+
+
+struct SliceNode<R: RangeBounds<Expr> + Send + Sync> {
+    string: Expr,
+    range: R,
+}
+
+impl<R: RangeBounds<Expr> + Send + Sync> ExprNode for SliceNode<R> {
+    fn eval<'a>(
+        &'a self,
+        read: &'a Read,
+        use_qual: bool,
+    ) -> std::result::Result<EvalData<'a>, NameError> {
+        let string = self.string.eval(read, use_qual)?;
+
+        use EvalData::*;
+        match string {
+            Bytes(b) => {
+                let mut start_add1 = false;
+                let start = match self.range.start_bound() {
+                    Bound::Included(s) => s.eval(read, use_qual)?,
+                    Bound::Excluded(s) => {
+                        start_add1 = true;
+                        s.eval(read, use_qual)?
+                    }
+                    Bound::Unbounded => Int(0),
+                };
+
+                let mut end_sub1 = false;
+                let end = match self.range.end_bound() {
+                    Bound::Included(e) => e.eval(read, use_qual)?,
+                    Bound::Excluded(e) => {
+                        end_sub1 = true;
+                        e.eval(read, use_qual)?
+                    }
+                    Bound::Unbounded => Int(b.len() as isize),
+                };
+
+                match (start, end) {
+                    (Int(mut s), Int(mut e)) => {
+                        let len = b.len() as isize;
+                        if e < 0 {
+                            e = len + e;
+                        }
+
+                        if end_sub1 {
+                            e -= 1
+                        }
+
+                        if start_add1 {
+                            s += 1
+                        }
+
+                        if s >= 0 && s <= len && e <= len && e >= 0 && s <= e {
+                            Ok(EvalData::Bytes(Cow::Owned(
+                                b.get(s as usize..e as usize).unwrap().into(),
+                            )))
+                        } else {
+                            Err(NameError::Type(
+                                "indices in bound",
+                                vec![Data::Int(s), Data::Int(e)],
+                            ))
+                        }
+                    }
+                    (s, e) => Err(NameError::Type("all int", vec![s.to_data(), e.to_data()])),
+                }
+            }
+            b => Err(NameError::Type("interval", vec![b.to_data()])),
+        }
+    }
+
+    fn required_names(&self) -> Vec<LabelOrAttr> {
+        let mut res = self.string.required_names();
+        match self.range.start_bound() {
+            Bound::Included(s) | Bound::Excluded(s) => res.append(&mut s.required_names()),
+            _ => (),
+        }
+        match self.range.end_bound() {
+            Bound::Included(e) | Bound::Excluded(e) => res.append(&mut e.required_names()),
+            _ => (),
+        }
+        res
     }
 }
 
