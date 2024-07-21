@@ -24,7 +24,7 @@ CCCCCCCC
     g.add(InputFastq1Node::from_bytes(fastq).unwrap_or_else(|e| panic!("{e}")));
     g.add(SetNode::new(
         label("seq1.*"),
-        Expr::from(label("seq1.*")).normalize(Expr::from(6)..=Expr::from(8)),
+        Expr::from(label("seq1.*")).normalize(6..=8),
     ));
     g.add(DbgNode::new());
     g.add(OutputFastqNode::new1("example_output/simple.fastq"));

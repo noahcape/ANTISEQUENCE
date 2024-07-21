@@ -90,11 +90,14 @@ impl Expr {
         }
     }
 
-    pub fn slice(self, range: impl RangeBounds<Expr> + Send + Sync + 'static) -> Expr {
+    pub fn slice<E, R: RangeBounds<E>>(
+        self,
+        range: impl RangeInto<E, R, (Bound<Expr>, Bound<Expr>)>,
+    ) -> Expr {
         Expr {
             node: Box::new(SliceNode {
                 string: self,
-                range,
+                range: range.range_into(),
             }),
         }
     }
@@ -128,11 +131,14 @@ impl Expr {
         }
     }
 
-    pub fn normalize(self, range: impl RangeBounds<Expr> + Send + Sync + 'static) -> Expr {
+    pub fn normalize<E, R: RangeBounds<E>>(
+        self,
+        range: impl RangeInto<E, R, (Bound<Expr>, Bound<Expr>)>,
+    ) -> Expr {
         Expr {
             node: Box::new(NormalizeNode {
                 string: self,
-                range,
+                range: range.range_into(),
             }),
         }
     }
@@ -321,12 +327,12 @@ impl ExprNode for EqNode {
     }
 }
 
-struct NormalizeNode<R> {
+struct NormalizeNode {
     string: Expr,
-    range: R,
+    range: (Bound<Expr>, Bound<Expr>),
 }
 
-impl<R: RangeBounds<Expr> + Send + Sync> ExprNode for NormalizeNode<R> {
+impl ExprNode for NormalizeNode {
     fn eval<'a>(
         &'a self,
         read: &'a Read,
@@ -341,7 +347,7 @@ impl<R: RangeBounds<Expr> + Send + Sync> ExprNode for NormalizeNode<R> {
         };
 
         let mut start_add1 = false;
-        let start = match self.range.start_bound() {
+        let start = match &self.range.0 {
             Bound::Included(s) => s.eval(read, use_qual)?,
             Bound::Excluded(s) => {
                 start_add1 = true;
@@ -356,7 +362,7 @@ impl<R: RangeBounds<Expr> + Send + Sync> ExprNode for NormalizeNode<R> {
         };
 
         let mut end_sub1 = false;
-        let end = match self.range.end_bound() {
+        let end = match &self.range.1 {
             Bound::Included(e) => e.eval(read, use_qual)?,
             Bound::Excluded(e) => {
                 end_sub1 = true;
@@ -769,13 +775,12 @@ impl ExprNode for ConcatAllNode {
     }
 }
 
-
-struct SliceNode<R: RangeBounds<Expr> + Send + Sync> {
+struct SliceNode {
     string: Expr,
-    range: R,
+    range: (Bound<Expr>, Bound<Expr>),
 }
 
-impl<R: RangeBounds<Expr> + Send + Sync> ExprNode for SliceNode<R> {
+impl ExprNode for SliceNode {
     fn eval<'a>(
         &'a self,
         read: &'a Read,
@@ -787,7 +792,7 @@ impl<R: RangeBounds<Expr> + Send + Sync> ExprNode for SliceNode<R> {
         match string {
             Bytes(b) => {
                 let mut start_add1 = false;
-                let start = match self.range.start_bound() {
+                let start = match &self.range.0 {
                     Bound::Included(s) => s.eval(read, use_qual)?,
                     Bound::Excluded(s) => {
                         start_add1 = true;
@@ -797,7 +802,7 @@ impl<R: RangeBounds<Expr> + Send + Sync> ExprNode for SliceNode<R> {
                 };
 
                 let mut end_sub1 = false;
-                let end = match self.range.end_bound() {
+                let end = match &self.range.1 {
                     Bound::Included(e) => e.eval(read, use_qual)?,
                     Bound::Excluded(e) => {
                         end_sub1 = true;
