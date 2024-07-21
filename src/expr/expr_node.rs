@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::marker::{Send, Sync};
-use std::ops::{Bound, RangeBounds};
+use std::ops::{Bound, Deref, RangeBounds};
 
 use crate::errors::NameError;
 use crate::expr::*;
@@ -56,6 +56,7 @@ impl Expr {
 
     unary_fn!(not, NotNode, boolean);
     unary_fn!(len, LenNode, string);
+    unary_fn!(rev, RevNode, string);
 
     unary_fn!(int, IntNode, convert);
     unary_fn!(float, FloatNode, convert);
@@ -272,6 +273,32 @@ impl ExprNode for EqNode {
         let mut res = self.left.required_names();
         res.append(&mut self.right.required_names());
         res
+    }
+}
+
+struct RevNode {
+    string: Expr,
+}
+
+impl ExprNode for RevNode {
+    fn eval<'a>(
+        &'a self,
+        read: &'a Read,
+        use_qual: bool,
+    ) -> std::result::Result<EvalData<'a>, NameError> {
+        let string = self.string.eval(read, use_qual)?;
+
+        use EvalData::*;
+        match string {
+            Bytes(b) => Ok(Bytes(Cow::Owned(
+                b.into_iter().rev().map(|e| *e).collect::<Vec<_>>(),
+            ))),
+            b => Err(NameError::Type("bytes", vec![b.to_data()])),
+        }
+    }
+
+    fn required_names(&self) -> Vec<LabelOrAttr> {
+        self.string.required_names()
     }
 }
 
