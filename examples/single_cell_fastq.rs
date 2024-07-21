@@ -65,11 +65,7 @@ AAAATTTTCCCCGGGGATATAT
     g.add(RetainNode::new(
         label_exists("seq1.bc1")
             .and(label_exists("seq1.bc2"))
-            .and(
-                Expr::from(label("seq1.bc1"))
-                    .len()
-                    .in_bounds(Expr::from(9)..=Expr::from(11)),
-            )
+            .and(Expr::from(label("seq1.bc1")).len().in_bounds(9..=11))
             .and(Expr::from(label("seq1.bc2")).len().eq(10)),
     ));
 

@@ -70,9 +70,15 @@ impl Expr {
         }
     }
 
-    pub fn in_bounds(self, range: impl RangeBounds<Expr> + Send + Sync + 'static) -> Expr {
+    pub fn in_bounds<E, R: RangeBounds<E>>(
+        self,
+        range: impl RangeInto<E, R, (Bound<Expr>, Bound<Expr>)>,
+    ) -> Expr {
         Expr {
-            node: Box::new(InBoundsNode { num: self, range }),
+            node: Box::new(InBoundsNode {
+                num: self,
+                range: range.range_into(),
+            }),
         }
     }
 
@@ -467,12 +473,12 @@ impl ExprNode for ConcatAllNode {
     }
 }
 
-struct InBoundsNode<R: RangeBounds<Expr> + Send + Sync> {
+struct InBoundsNode {
     num: Expr,
-    range: R,
+    range: (Bound<Expr>, Bound<Expr>),
 }
 
-impl<R: RangeBounds<Expr> + Send + Sync> ExprNode for InBoundsNode<R> {
+impl ExprNode for InBoundsNode {
     fn eval<'a>(
         &'a self,
         read: &'a Read,
@@ -482,7 +488,7 @@ impl<R: RangeBounds<Expr> + Send + Sync> ExprNode for InBoundsNode<R> {
 
         use EvalData::*;
         let mut start_add1 = false;
-        let start = match self.range.start_bound() {
+        let start = match &self.range.0 {
             Bound::Included(s) => s.eval(read, use_qual)?,
             Bound::Excluded(s) => {
                 start_add1 = true;
@@ -492,7 +498,7 @@ impl<R: RangeBounds<Expr> + Send + Sync> ExprNode for InBoundsNode<R> {
         };
 
         let mut end_sub1 = false;
-        let end = match self.range.end_bound() {
+        let end = match &self.range.1 {
             Bound::Included(e) => e.eval(read, use_qual)?,
             Bound::Excluded(e) => {
                 end_sub1 = true;
@@ -520,12 +526,12 @@ impl<R: RangeBounds<Expr> + Send + Sync> ExprNode for InBoundsNode<R> {
 
     fn required_names(&self) -> Vec<LabelOrAttr> {
         let mut res = self.num.required_names();
-        match self.range.start_bound() {
+        match &self.range.0 {
             Bound::Included(s) => res.append(&mut s.required_names()),
             Bound::Excluded(s) => res.append(&mut s.required_names()),
             _ => (),
         }
-        match self.range.end_bound() {
+        match &self.range.1 {
             Bound::Included(e) => res.append(&mut e.required_names()),
             Bound::Excluded(e) => res.append(&mut e.required_names()),
             _ => (),
@@ -772,6 +778,71 @@ impl<E: ExprNode + Send + Sync + 'static> From<E> for Expr {
         Expr { node: Box::new(v) }
     }
 }
+
+pub trait FromRange<E, R: RangeBounds<E>> {
+    fn from_range(r: R) -> Self;
+}
+
+pub trait RangeInto<E, R: RangeBounds<E>, T> {
+    fn range_into(self) -> T;
+}
+
+impl<E, R: RangeBounds<E>, T: FromRange<E, R>> RangeInto<E, R, T> for R {
+    fn range_into(self) -> T {
+        T::from_range(self)
+    }
+}
+
+impl<E: ExprNode + Send + Sync + Copy + 'static, R: RangeBounds<E>> FromRange<E, R>
+    for (Bound<Expr>, Bound<Expr>)
+{
+    fn from_range(r: R) -> Self {
+        (
+            r.start_bound().map(|&b| Expr::from(b)),
+            r.end_bound().map(|&b| Expr::from(b)),
+        )
+    }
+}
+
+macro_rules! impl_from_range_expr {
+    ($type_name:ty, $r:ident, $tuple:expr) => {
+        impl FromRange<Expr, $type_name> for (Bound<Expr>, Bound<Expr>) {
+            fn from_range($r: $type_name) -> Self {
+                $tuple
+            }
+        }
+    };
+}
+
+impl_from_range_expr!(
+    std::ops::Range<Expr>,
+    r,
+    (Bound::Included(r.start), Bound::Excluded(r.end))
+);
+impl_from_range_expr!(
+    std::ops::RangeFrom<Expr>,
+    r,
+    (Bound::Included(r.start), Bound::Unbounded)
+);
+impl_from_range_expr!(
+    std::ops::RangeFull,
+    _r,
+    (Bound::Unbounded, Bound::Unbounded)
+);
+impl_from_range_expr!(std::ops::RangeInclusive<Expr>, r, {
+    let (s, e) = r.into_inner();
+    (Bound::Included(s), Bound::Included(e))
+});
+impl_from_range_expr!(
+    std::ops::RangeTo<Expr>,
+    r,
+    (Bound::Unbounded, Bound::Excluded(r.end))
+);
+impl_from_range_expr!(
+    std::ops::RangeToInclusive<Expr>,
+    r,
+    (Bound::Unbounded, Bound::Included(r.end))
+);
 
 #[derive(Debug)]
 pub enum EvalData<'a> {
