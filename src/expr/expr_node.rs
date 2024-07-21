@@ -511,6 +511,7 @@ impl ExprNode for RevCompNode {
             Bytes(b) => {
                 let b = if self.is_rna {
                     b.into_iter()
+                        .rev()
                         .map(|e| match e {
                             b'A' => b'U',
                             b'U' => b'A',
@@ -521,6 +522,7 @@ impl ExprNode for RevCompNode {
                         .collect::<Vec<_>>()
                 } else {
                     b.into_iter()
+                        .rev()
                         .map(|e| match e {
                             b'A' => b'T',
                             b'T' => b'A',
