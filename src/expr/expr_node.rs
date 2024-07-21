@@ -110,6 +110,16 @@ impl Expr {
         }
     }
 
+    pub fn pad(self, pad_char: Expr, end_idx: EndIdx) -> Expr {
+        Expr {
+            node: Box::new(PadNode {
+                string: self,
+                pad_char,
+                end_idx,
+            }),
+        }
+    }
+
     pub fn eval_bool<'a>(&'a self, read: &'a Read) -> std::result::Result<bool, NameError> {
         let res = self.eval(read, false)?;
 
@@ -291,6 +301,63 @@ impl ExprNode for EqNode {
         let mut res = self.left.required_names();
         res.append(&mut self.right.required_names());
         res
+    }
+}
+
+struct PadNode {
+    string: Expr,
+    pad_char: Expr,
+    end_idx: EndIdx,
+}
+
+impl ExprNode for PadNode {
+    fn eval<'a>(
+        &'a self,
+        read: &'a Read,
+        use_qual: bool,
+    ) -> std::result::Result<EvalData<'a>, NameError> {
+        let string = self.string.eval(read, use_qual)?;
+        let pad_char = self.pad_char.eval(read, use_qual)?;
+
+        use EvalData::*;
+        let string = match string {
+            Bytes(b) => b,
+            b => return Err(NameError::Type("bytes", vec![b.to_data()])),
+        };
+
+        match self.end_idx {
+            RightEnd(n) | LeftEnd(n) => {
+                if string.len() >= n {
+                    return Err(NameError::Type(
+                        "usize longer than interval length",
+                        vec![Data::Int(n as isize)],
+                    ));
+                }
+            }
+        }
+
+        let pad_char = match pad_char {
+            Bytes(b) => b,
+            b => return Err(NameError::Type("bytes", vec![b.to_data()])),
+        };
+
+        let padded = match self.end_idx {
+            LeftEnd(n) => {
+                let mut padded = pad_char.repeat(n - string.len());
+                padded.append(&mut string.to_vec());
+                padded
+            }
+            RightEnd(n) => {
+                let mut padded = string.to_vec();
+                padded.append(&mut pad_char.repeat(n - string.len()));
+                padded
+            }
+        };
+        Ok(Bytes(Cow::Owned(padded)))
+    }
+
+    fn required_names(&self) -> Vec<LabelOrAttr> {
+        self.string.required_names()
     }
 }
 

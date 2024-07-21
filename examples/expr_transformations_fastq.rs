@@ -27,7 +27,9 @@ AAAAACCATTTTT
     ));
     g.add(SetNode::new(
         label("seq1.mid"),
-        Expr::from(label("seq1.mid")).revcomp(),
+        Expr::from(label("seq1.mid"))
+            .revcomp()
+            .pad(Expr::from("A"), RightEnd(4)),
     ));
     g.add(DbgNode::new());
     g.add(OutputFastqNode::new1("example_output/simple.fastq"));
