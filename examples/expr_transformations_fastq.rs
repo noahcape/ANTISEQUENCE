@@ -29,7 +29,7 @@ AAAAACCATTTTT
         label("seq1.mid"),
         Expr::from(label("seq1.mid"))
             .revcomp()
-            .pad(Expr::from("A"), RightEnd(4)),
+            .pad(Expr::from("A"), Expr::from(5), Left),
     ));
     g.add(DbgNode::new());
     g.add(OutputFastqNode::new1("example_output/simple.fastq"));
