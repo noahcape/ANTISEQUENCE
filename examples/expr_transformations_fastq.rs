@@ -23,7 +23,7 @@ AAAAACCATTTTT
     ));
     g.add(SetNode::new(
         label("seq1.mid"),
-        Expr::from(label("seq1.mid")).slice(Expr::from(1)..),
+        Expr::from(label("seq1.mid")).slice(1..),
     ));
     g.add(SetNode::new(
         label("seq1.mid"),
