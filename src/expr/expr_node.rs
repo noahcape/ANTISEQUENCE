@@ -540,6 +540,12 @@ impl ExprNode for InBoundsNode {
     }
 }
 
+pub fn fmt_expr(format_str: impl AsRef<[u8]>) -> Expr {
+    let exprs = parse_fmt_expr(format_str.as_ref())
+        .unwrap_or_else(|e| panic!("Error constructing format expression:\n{e}"));
+    concat_all(exprs)
+}
+
 impl ExprNode for Label {
     fn eval<'a>(
         &'a self,
