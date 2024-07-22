@@ -86,7 +86,7 @@
 
 pub mod errors;
 pub mod expr;
-mod graph;
+pub mod graph;
 mod patterns;
 mod read;
 
@@ -95,6 +95,5 @@ mod parse_utils;
 
 // commonly used functions and types
 
-pub use crate::graph::*;
 pub use crate::patterns::*;
 pub use crate::read::*;
