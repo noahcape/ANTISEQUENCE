@@ -488,7 +488,7 @@ impl ExprNode for InBoundsNode {
 
         use EvalData::*;
         let mut start_add1 = false;
-        let start = match &self.range.0 {
+        let start = match self.range.start_bound() {
             Bound::Included(s) => s.eval(read, use_qual)?,
             Bound::Excluded(s) => {
                 start_add1 = true;
@@ -498,7 +498,7 @@ impl ExprNode for InBoundsNode {
         };
 
         let mut end_sub1 = false;
-        let end = match &self.range.1 {
+        let end = match self.range.end_bound() {
             Bound::Included(e) => e.eval(read, use_qual)?,
             Bound::Excluded(e) => {
                 end_sub1 = true;
@@ -526,12 +526,12 @@ impl ExprNode for InBoundsNode {
 
     fn required_names(&self) -> Vec<LabelOrAttr> {
         let mut res = self.num.required_names();
-        match &self.range.0 {
+        match self.range.start_bound() {
             Bound::Included(s) => res.append(&mut s.required_names()),
             Bound::Excluded(s) => res.append(&mut s.required_names()),
             _ => (),
         }
-        match &self.range.1 {
+        match self.range.end_bound() {
             Bound::Included(e) => res.append(&mut e.required_names()),
             Bound::Excluded(e) => res.append(&mut e.required_names()),
             _ => (),
