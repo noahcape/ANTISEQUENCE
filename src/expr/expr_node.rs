@@ -329,7 +329,7 @@ impl ExprNode for NormalizeNode {
         };
 
         let mut start_add1 = false;
-        let start = match &self.range.0 {
+        let start = match self.range.start_bound() {
             Bound::Included(s) => s.eval(read, use_qual)?,
             Bound::Excluded(s) => {
                 start_add1 = true;
@@ -344,7 +344,7 @@ impl ExprNode for NormalizeNode {
         };
 
         let mut end_sub1 = false;
-        let end = match &self.range.1 {
+        let end = match self.range.end_bound() {
             Bound::Included(e) => e.eval(read, use_qual)?,
             Bound::Excluded(e) => {
                 end_sub1 = true;
@@ -760,7 +760,7 @@ impl ExprNode for SliceNode {
         match string {
             Bytes(b) => {
                 let mut start_add1 = false;
-                let start = match &self.range.0 {
+                let start = match self.range.start_bound() {
                     Bound::Included(s) => s.eval(read, use_qual)?,
                     Bound::Excluded(s) => {
                         start_add1 = true;
@@ -770,7 +770,7 @@ impl ExprNode for SliceNode {
                 };
 
                 let mut end_sub1 = false;
-                let end = match &self.range.1 {
+                let end = match self.range.end_bound() {
                     Bound::Included(e) => e.eval(read, use_qual)?,
                     Bound::Excluded(e) => {
                         end_sub1 = true;
