@@ -8,8 +8,7 @@ use crate::read::*;
 
 const UNKNOWN_QUAL: u8 = b'I';
 
-// Default DNA
-pub const NUC_MAP: [u8; 4] = [b'A', b'C', b'T', b'G'];
+pub static NUC_MAP: [u8; 4] = [b'A', b'C', b'T', b'G'];
 
 /// One node in an expression tree.
 pub struct Expr {
@@ -40,7 +39,7 @@ macro_rules! unary_fn {
 }
 
 pub fn log4_roundup(n: usize) -> usize {
-    std::ops::Div::div((usize::BITS - n.leading_zeros()) as f64, 2.0).ceil() as usize
+    (n.ilog2() + 1).div_ceil(2) as usize
 }
 
 impl Expr {
@@ -64,6 +63,7 @@ impl Expr {
     unary_fn!(not, NotNode, boolean);
     unary_fn!(len, LenNode, string);
     unary_fn!(rev, RevNode, string);
+    unary_fn!(revcomp, RevCompNode, string);
 
     unary_fn!(int, IntNode, convert);
     unary_fn!(float, FloatNode, convert);
@@ -98,24 +98,6 @@ impl Expr {
             node: Box::new(SliceNode {
                 string: self,
                 range: range.range_into(),
-            }),
-        }
-    }
-
-    pub fn revcomp_rna(self) -> Expr {
-        Expr {
-            node: Box::new(RevCompNode {
-                string: self,
-                is_rna: true,
-            }),
-        }
-    }
-
-    pub fn revcomp(self) -> Expr {
-        Expr {
-            node: Box::new(RevCompNode {
-                string: self,
-                is_rna: false,
             }),
         }
     }
@@ -405,10 +387,10 @@ impl ExprNode for NormalizeNode {
         let mut variable_seg = [b'0'].repeat(extra_len);
 
         for i in 0..extra_len {
-            let nuc = NUC_MAP.get(length_diff & (usize::MAX & 3)).unwrap();
+            let nuc = NUC_MAP[length_diff & 0b11];
             length_diff >>= 2;
 
-            variable_seg[i] = *nuc;
+            variable_seg[i] = nuc;
         }
 
         let mut normalized = string.to_vec();
@@ -495,7 +477,6 @@ impl ExprNode for PadNode {
 
 struct RevCompNode {
     string: Expr,
-    is_rna: bool,
 }
 
 impl ExprNode for RevCompNode {
@@ -508,33 +489,18 @@ impl ExprNode for RevCompNode {
 
         use EvalData::*;
         match string {
-            Bytes(b) => {
-                let b = if self.is_rna {
-                    b.into_iter()
-                        .rev()
-                        .map(|e| match e {
-                            b'A' => b'U',
-                            b'U' => b'A',
-                            b'G' => b'C',
-                            b'C' => b'G',
-                            b => *b,
-                        })
-                        .collect::<Vec<_>>()
-                } else {
-                    b.into_iter()
-                        .rev()
-                        .map(|e| match e {
-                            b'A' => b'T',
-                            b'T' => b'A',
-                            b'G' => b'C',
-                            b'C' => b'G',
-                            b => *b,
-                        })
-                        .collect::<Vec<_>>()
-                };
-
-                Ok(Bytes(Cow::Owned(b)))
-            }
+            Bytes(b) => Ok(Bytes(Cow::Owned(
+                b.into_iter()
+                    .rev()
+                    .map(|e| match e {
+                        b'A' => b'T',
+                        b'T' => b'A',
+                        b'G' => b'C',
+                        b'C' => b'G',
+                        b => *b,
+                    })
+                    .collect::<Vec<_>>(),
+            ))),
             b => Err(NameError::Type("bytes", vec![b.to_data()])),
         }
     }
