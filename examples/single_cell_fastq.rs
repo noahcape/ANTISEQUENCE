@@ -70,15 +70,10 @@ AAAATTTTCCCCGGGGATATAT
     ));
 
     // move the UMI and barcodes to the read name
-    let read_name1 = [
-        Expr::from(label("name1.*")),
-        Expr::from("_"),
-        Expr::from(label("seq1.umi")),
-        Expr::from("_"),
-        Expr::from(label("seq1.bc1")),
-        Expr::from(label("seq1.bc2")),
-    ];
-    g.add(SetNode::new(label("name1.*"), concat_all(read_name1)));
+    g.add(SetNode::new(
+        label("name1.*"),
+        fmt_expr("{name1.*}_{seq1.umi}_{seq1.bc1}{seq1.bc2}"),
+    ));
     g.add(SetNode::new(label("seq1.*"), label("seq2.*")));
 
     g.add(OutputFastqNode::new1("example_output/single_cell.fastq"));

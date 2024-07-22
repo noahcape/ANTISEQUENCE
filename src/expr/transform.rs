@@ -20,8 +20,8 @@ impl TransformExpr {
     }
 
     /// Parse a byte string to get a transform expression.
-    pub fn from_bytes(expr: &[u8]) -> Result<Self> {
-        let (before, after) = parse(expr)?;
+    pub fn from_bytes(expr: impl AsRef<[u8]>) -> Result<Self> {
+        let (before, after) = parse(expr.as_ref())?;
         Ok(Self { before, after })
     }
 
