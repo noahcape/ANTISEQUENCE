@@ -383,15 +383,24 @@ impl ExprNode for NormalizeNode {
         let mut length_diff = end as usize - string.len();
         let extra_len = log4_roundup((end - start + 1) as usize);
 
-        let mut buff = [b'A'].repeat(length_diff);
-        let mut variable_seg = [b'0'].repeat(extra_len);
+        let buff_char = if use_qual { UNKNOWN_QUAL } else { b'A' };
 
-        for i in 0..extra_len {
-            let nuc = NUC_MAP[length_diff & 0b11];
-            length_diff >>= 2;
+        let mut buff = [buff_char].repeat(length_diff);
 
-            variable_seg[i] = nuc;
-        }
+        let mut variable_seg = if use_qual {
+            [UNKNOWN_QUAL].repeat(extra_len)
+        } else {
+            let mut variable_seg = [b'0'].repeat(extra_len);
+
+            for i in 0..extra_len {
+                let nuc = NUC_MAP[length_diff & 0b11];
+                length_diff >>= 2;
+
+                variable_seg[i] = nuc;
+            }
+
+            variable_seg
+        };
 
         let mut normalized = string.to_vec();
         normalized.append(&mut buff);
