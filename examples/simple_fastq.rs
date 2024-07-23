@@ -15,5 +15,6 @@ fn main() {
     g.add(TrimNode::new([label("seq1.a")]));
     g.add(DbgNode::new());
     g.add(OutputFastqNode::new1("example_output/simple.fastq"));
+    g.add(ForEachNode::new(|read| println!("{}", read.to_json())));
     g.run().unwrap_or_else(|e| panic!("{e}"));
 }

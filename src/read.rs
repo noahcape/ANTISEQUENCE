@@ -1,5 +1,8 @@
 use rustc_hash::FxHashMap;
 
+use serde::Serialize;
+use serde_json;
+
 use std::fmt;
 use std::sync::Arc;
 
@@ -336,7 +339,8 @@ pub struct Mapping {
 }
 
 /// Data types.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Serialize)]
+#[serde(untagged)]
 pub enum Data {
     Bool(bool),
     Int(isize),
@@ -532,6 +536,10 @@ impl Read {
             (name1.string(), seq1.string(), seq1.qual().unwrap()),
             (name2.string(), seq2.string(), seq2.qual().unwrap()),
         ))
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(&SerializableRead::from(self)).unwrap()
     }
 
     pub fn str_mappings(&self, str_type: StrType) -> Option<&StrMappings> {
@@ -879,5 +887,64 @@ impl fmt::Display for Origin {
             Origin::File(file) => write!(f, "file: \"{}\"", file),
             Origin::Bytes => write!(f, "bytes"),
         }
+    }
+}
+
+#[derive(Serialize)]
+struct SerializableRead(FxHashMap<String, SerializableStrMapping>);
+
+#[derive(Serialize)]
+struct SerializableStrMapping {
+    #[serde(flatten)]
+    mappings: FxHashMap<String, SerializableMapping>,
+    idx: usize,
+}
+
+#[derive(Serialize)]
+struct SerializableMapping {
+    string: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    qual: Option<String>,
+    #[serde(skip_serializing_if = "FxHashMap::is_empty")]
+    data: FxHashMap<String, Data>,
+}
+
+impl From<&Read> for SerializableRead {
+    fn from(r: &Read) -> Self {
+        let mut str_mappings = FxHashMap::default();
+
+        for (str_type, str_mapping) in &r.str_mappings {
+            let mut mappings = FxHashMap::default();
+
+            for mapping in &str_mapping.mappings {
+                if mapping.label.bytes().next() == Some(b'_') {
+                    continue;
+                }
+
+                let data = mapping
+                    .data
+                    .iter()
+                    .map(|(attr, value)| (attr.to_string(), value.clone()))
+                    .collect::<FxHashMap<_, _>>();
+                let serializable_mapping = SerializableMapping {
+                    string: std::str::from_utf8(str_mapping.substring(mapping))
+                        .unwrap()
+                        .to_string(),
+                    qual: str_mapping
+                        .substring_qual(mapping)
+                        .map(|q| std::str::from_utf8(q).unwrap().to_string()),
+                    data,
+                };
+                mappings.insert(mapping.label.to_string(), serializable_mapping);
+            }
+
+            let serializable_str_mapping = SerializableStrMapping {
+                mappings,
+                idx: str_mapping.idx,
+            };
+            str_mappings.insert(str_type.to_string(), serializable_str_mapping);
+        }
+
+        Self(str_mappings)
     }
 }
