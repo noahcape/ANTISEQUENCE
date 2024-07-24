@@ -1,5 +1,5 @@
 use antisequence::expr::*;
-use antisequence::node::*;
+use antisequence::graph::*;
 use antisequence::*;
 
 fn main() {
