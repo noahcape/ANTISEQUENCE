@@ -48,6 +48,9 @@ pub use input_fastq_node::*;
 mod output_fastq_node;
 pub use output_fastq_node::*;
 
+mod output_json_node;
+pub use output_json_node::*;
+
 mod select_node;
 pub use select_node::*;
 

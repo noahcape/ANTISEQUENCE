@@ -4,7 +4,7 @@ use antisequence::*;
 
 fn main() {
     let mut g = Graph::new();
-    g.add(InputFastq1Node::new("example_data/simple.fastq").unwrap_or_else(|e| panic!("{e}")));
+    g.add(InputFastqNode::from_file("example_data/simple.fastq").unwrap_or_else(|e| panic!("{e}")));
     g.add(CutNode::new(tr!(seq1.* -> seq1.a, seq1.b), LeftEnd(3)));
     g.add(CutNode::new(tr!(seq1.b -> _, seq1.b), RightEnd(4)));
     g.add(DbgNode::new());
@@ -14,7 +14,11 @@ fn main() {
     ));
     g.add(TrimNode::new([label("seq1.a")]));
     g.add(DbgNode::new());
-    g.add(OutputFastqNode::new1("example_output/simple.fastq"));
-    g.add(ForEachNode::new(|read| println!("{}", read.to_json())));
+    g.add(OutputFastqFileNode::from_file(
+        "example_output/simple.fastq",
+    ));
+    g.add(
+        OutputJsonNode::from_file("example_output/simple.json").unwrap_or_else(|e| panic!("{e}")),
+    );
     g.run().unwrap_or_else(|e| panic!("{e}"));
 }

@@ -13,79 +13,120 @@ use crate::graph::*;
 
 const CHUNK_SIZE: usize = 256;
 
-pub struct InputFastq1Node<'reader> {
-    reader: Mutex<Box<dyn FastxReader + 'reader>>,
+pub struct InputFastqNode<'reader> {
+    readers: Vec<(Mutex<Box<dyn FastxReader + 'reader>>, Arc<Origin>)>,
     buf: ThreadLocal<RefCell<VecDeque<Read>>>,
-    origin: Arc<Origin>,
     idx: AtomicUsize,
-    interleaved: bool,
+    interleaved: usize,
 }
 
-impl<'reader> InputFastq1Node<'reader> {
-    const NAME: &'static str = "InputFastq1Node";
+impl<'reader> InputFastqNode<'reader> {
+    const NAME: &'static str = "InputFastqNode";
 
     /// Stream reads created from fastq records from an input file.
-    pub fn new(file: impl AsRef<str>) -> Result<Self> {
+    pub fn from_file(file: impl AsRef<str>) -> Result<Self> {
         let reader = Mutex::new(parse_fastx_file(file.as_ref()).map_err(|e| Error::FileIo {
             file: file.as_ref().to_owned(),
             source: Box::new(e),
         })?);
 
         Ok(Self {
-            reader,
+            readers: vec![(reader, Arc::new(Origin::File(file.as_ref().to_owned())))],
             buf: ThreadLocal::new(),
-            origin: Arc::new(Origin::File(file.as_ref().to_owned())),
             idx: AtomicUsize::new(0),
-            interleaved: false,
+            interleaved: 1,
         })
     }
 
-    /// Stream reads created from interleaved paired-end fastq records from an input file.
-    pub fn new_interleaved(file: impl AsRef<str>) -> Result<Self> {
+    /// Stream reads created from fastq records from multiple input files.
+    pub fn from_files<S: AsRef<str>>(files: impl IntoIterator<Item = S>) -> Result<Self> {
+        let readers = files
+            .into_iter()
+            .map(|f| {
+                let file = f.as_ref();
+                (
+                    Mutex::new(parse_fastx_file(file).unwrap_or_else(|e| panic!("{e}"))),
+                    Arc::new(Origin::File(file.to_owned())),
+                )
+            })
+            .collect();
+
+        Ok(Self {
+            readers,
+            buf: ThreadLocal::new(),
+            idx: AtomicUsize::new(0),
+            interleaved: 1,
+        })
+    }
+
+    /// Stream reads created from interleaved fastq records from an input file.
+    pub fn from_file_interleaved(file: impl AsRef<str>, interleaved: usize) -> Result<Self> {
         let reader = Mutex::new(parse_fastx_file(file.as_ref()).map_err(|e| Error::FileIo {
             file: file.as_ref().to_owned(),
             source: Box::new(e),
         })?);
 
         Ok(Self {
-            reader,
+            readers: vec![(reader, Arc::new(Origin::File(file.as_ref().to_owned())))],
             buf: ThreadLocal::new(),
-            origin: Arc::new(Origin::File(file.as_ref().to_owned())),
             idx: AtomicUsize::new(0),
-            interleaved: true,
+            interleaved,
         })
     }
 
-    /// Stream reads created from fastq records from a byte slice.
-    pub fn from_bytes(bytes: &'reader [u8]) -> Result<Self> {
+    /// Stream reads created from fastq records from an arbitrary `Read`er.
+    pub fn from_reader(reader: impl std::io::Read + Send + 'reader) -> Result<Self> {
         let reader =
-            Mutex::new(parse_fastx_reader(bytes).map_err(|e| Error::BytesIo(Box::new(e)))?);
+            Mutex::new(parse_fastx_reader(reader).map_err(|e| Error::BytesIo(Box::new(e)))?);
 
         Ok(Self {
-            reader,
+            readers: vec![(reader, Arc::new(Origin::Bytes))],
             buf: ThreadLocal::new(),
-            origin: Arc::new(Origin::Bytes),
             idx: AtomicUsize::new(0),
-            interleaved: false,
+            interleaved: 1,
         })
     }
 
-    /// Stream reads created from interleaved paired-end fastq records from a byte slice.
-    pub fn from_interleaved_bytes(bytes: &'reader [u8]) -> Result<Self> {
-        let reader =
-            Mutex::new(parse_fastx_reader(bytes).map_err(|e| Error::BytesIo(Box::new(e)))?);
+    /// Stream reads created from fastq records from multiple arbitrary `Read`ers.
+    pub fn from_readers<R: std::io::Read + Send + 'reader>(
+        readers: impl IntoIterator<Item = R>,
+    ) -> Result<Self> {
+        let readers = readers
+            .into_iter()
+            .map(|r| {
+                (
+                    Mutex::new(parse_fastx_reader(r).unwrap_or_else(|e| panic!("{e}"))),
+                    Arc::new(Origin::Bytes),
+                )
+            })
+            .collect::<Vec<_>>();
 
         Ok(Self {
-            reader,
+            readers,
             buf: ThreadLocal::new(),
-            origin: Arc::new(Origin::Bytes),
             idx: AtomicUsize::new(0),
-            interleaved: true,
+            interleaved: 1,
+        })
+    }
+
+    /// Stream reads created from interleaved fastq records from an arbitrary `Read`er.
+    pub fn from_interleaved_reader(
+        reader: impl std::io::Read + Send + 'reader,
+        interleaved: usize,
+    ) -> Result<Self> {
+        let reader =
+            Mutex::new(parse_fastx_reader(reader).map_err(|e| Error::BytesIo(Box::new(e)))?);
+
+        Ok(Self {
+            readers: vec![(reader, Arc::new(Origin::Bytes))],
+            buf: ThreadLocal::new(),
+            idx: AtomicUsize::new(0),
+            interleaved,
         })
     }
 }
 
-impl<'reader> GraphNode for InputFastq1Node<'reader> {
+impl<'reader> GraphNode for InputFastqNode<'reader> {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         assert!(read.is_none(), "Expected no input reads for {}", Self::NAME);
 
@@ -95,166 +136,67 @@ impl<'reader> GraphNode for InputFastq1Node<'reader> {
         let mut b = buf.borrow_mut();
 
         if b.is_empty() {
-            let mut record1_id = Vec::new();
-            let mut record1_seq = Vec::new();
-            let mut record1_qual = Vec::new();
-            let mut reader = self.reader.lock().unwrap();
+            let mut locked_readers = self
+                .readers
+                .iter()
+                .map(|(r, o)| (r.lock().unwrap(), o))
+                .collect::<Vec<_>>();
 
-            for _ in 0..CHUNK_SIZE {
-                if let Some(record1) = reader.next() {
-                    let record1 = record1.map_err(|e| Error::ParseRecord {
-                        origin: (*self.origin).clone(),
-                        idx: self.idx.load(Ordering::Relaxed),
-                        source: Box::new(e),
-                    })?;
+            'outer: for _ in 0..CHUNK_SIZE {
+                let idx = self.idx.fetch_add(self.interleaved, Ordering::Relaxed);
+                let mut curr_read = Read::new();
 
-                    if self.interleaved {
-                        record1_id.clear();
-                        record1_id.extend_from_slice(record1.id());
-                        record1_seq.clear();
-                        record1_seq.extend_from_slice(&record1.seq());
-                        record1_qual.clear();
-                        record1_qual.extend_from_slice(record1.qual().unwrap());
-                    } else {
-                        let idx = self.idx.fetch_add(1, Ordering::Relaxed);
+                if self.interleaved > 1 {
+                    // interleaved records all come from one file
+                    let (locked_reader, origin) = &mut locked_readers[0];
 
-                        b.push_back(Read::from_fastq1(
-                            record1.id(),
-                            &record1.seq(),
-                            record1.qual().unwrap(),
-                            Arc::clone(&self.origin),
-                            idx,
-                        ));
+                    for i in 0..self.interleaved {
+                        let Some(record) = locked_reader.next() else {
+                            if i == 0 {
+                                break 'outer;
+                            }
+                            Err(Error::UnpairedRead(format!("\"{}\"", &**origin)))?
+                        };
+                        let record = record.map_err(|e| Error::ParseRecord {
+                            origin: (***origin).clone(),
+                            idx: idx + i,
+                            source: Box::new(e),
+                        })?;
+                        curr_read.add_fastq(
+                            (i + 1) as _,
+                            record.id(),
+                            &record.seq(),
+                            record.qual().unwrap(),
+                            Arc::clone(origin),
+                            idx + i,
+                        );
                     }
                 } else {
-                    break;
+                    // gather records from multiple different files
+                    for (i, (locked_reader, origin)) in locked_readers.iter_mut().enumerate() {
+                        let Some(record) = locked_reader.next() else {
+                            if i == 0 {
+                                break 'outer;
+                            }
+                            Err(Error::UnpairedRead(format!("\"{}\"", &**origin)))?
+                        };
+                        let record = record.map_err(|e| Error::ParseRecord {
+                            origin: (***origin).clone(),
+                            idx,
+                            source: Box::new(e),
+                        })?;
+                        curr_read.add_fastq(
+                            (i + 1) as _,
+                            record.id(),
+                            &record.seq(),
+                            record.qual().unwrap(),
+                            Arc::clone(origin),
+                            idx,
+                        );
+                    }
                 }
 
-                if self.interleaved {
-                    let Some(record2) = reader.next() else {
-                        Err(Error::UnpairedRead(format!("\"{}\"", &*self.origin)))?
-                    };
-                    let record2 = record2.map_err(|e| Error::ParseRecord {
-                        origin: (*self.origin).clone(),
-                        idx: self.idx.load(Ordering::Relaxed) + 1,
-                        source: Box::new(e),
-                    })?;
-                    let idx = self.idx.fetch_add(2, Ordering::Relaxed);
-
-                    b.push_back(Read::from_fastq2(
-                        &record1_id,
-                        &record1_seq,
-                        &record1_qual,
-                        Arc::clone(&self.origin),
-                        idx,
-                        record2.id(),
-                        &record2.seq(),
-                        record2.qual().unwrap(),
-                        Arc::clone(&self.origin),
-                        idx + 1,
-                    ));
-                }
-            }
-        }
-
-        if b.is_empty() {
-            return Ok((None, true));
-        }
-
-        Ok((b.pop_front(), false))
-    }
-
-    fn required_names(&self) -> &[LabelOrAttr] {
-        &[]
-    }
-
-    fn name(&self) -> &'static str {
-        Self::NAME
-    }
-}
-
-pub struct InputFastq2Node {
-    reader1: Mutex<Box<dyn FastxReader>>,
-    reader2: Mutex<Box<dyn FastxReader>>,
-    buf: ThreadLocal<RefCell<VecDeque<Read>>>,
-    origin1: Arc<Origin>,
-    origin2: Arc<Origin>,
-    idx: AtomicUsize,
-}
-
-impl InputFastq2Node {
-    const NAME: &'static str = "InputFastq2Node";
-
-    /// Stream reads created from paired-end fastq records from two different input files.
-    pub fn new(file1: impl AsRef<str>, file2: impl AsRef<str>) -> Result<Self> {
-        let reader1 = Mutex::new(parse_fastx_file(file1.as_ref()).map_err(|e| Error::FileIo {
-            file: file1.as_ref().to_owned(),
-            source: Box::new(e),
-        })?);
-        let reader2 = Mutex::new(parse_fastx_file(file2.as_ref()).map_err(|e| Error::FileIo {
-            file: file2.as_ref().to_owned(),
-            source: Box::new(e),
-        })?);
-
-        Ok(Self {
-            reader1,
-            reader2,
-            buf: ThreadLocal::new(),
-            origin1: Arc::new(Origin::File(file1.as_ref().to_owned())),
-            origin2: Arc::new(Origin::File(file2.as_ref().to_owned())),
-            idx: AtomicUsize::new(0),
-        })
-    }
-}
-
-impl GraphNode for InputFastq2Node {
-    fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        assert!(read.is_none(), "Expected no input reads for {}", Self::NAME);
-
-        let buf = self
-            .buf
-            .get_or(|| RefCell::new(VecDeque::with_capacity(CHUNK_SIZE)));
-        let mut b = buf.borrow_mut();
-
-        if b.is_empty() {
-            let mut reader1 = self.reader1.lock().unwrap();
-            let mut reader2 = self.reader2.lock().unwrap();
-
-            for _ in 0..CHUNK_SIZE {
-                let Some(record1) = reader1.next() else {
-                    break;
-                };
-                let Some(record2) = reader2.next() else {
-                    Err(Error::UnpairedRead(format!(
-                        "\"{}\" and \"{}\"",
-                        &*self.origin1, &*self.origin2
-                    )))?
-                };
-
-                let record1 = record1.map_err(|e| Error::ParseRecord {
-                    origin: (*self.origin1).clone(),
-                    idx: self.idx.load(Ordering::Relaxed),
-                    source: Box::new(e),
-                })?;
-                let record2 = record2.map_err(|e| Error::ParseRecord {
-                    origin: (*self.origin2).clone(),
-                    idx: self.idx.load(Ordering::Relaxed),
-                    source: Box::new(e),
-                })?;
-                let idx = self.idx.fetch_add(1, Ordering::Relaxed);
-
-                b.push_back(Read::from_fastq2(
-                    record1.id(),
-                    &record1.seq(),
-                    record1.qual().unwrap(),
-                    Arc::clone(&self.origin1),
-                    idx,
-                    record2.id(),
-                    &record2.seq(),
-                    record2.qual().unwrap(),
-                    Arc::clone(&self.origin2),
-                    idx,
-                ));
+                b.push_back(curr_read);
             }
         }
 
