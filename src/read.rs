@@ -28,16 +28,14 @@ pub enum End {
 
 /// Valid types of strings.
 ///
-/// Types like `Name` or `Seq` refer to the corresponding line in a fastq record.
+/// `Name` or `Seq` refer to the corresponding line in a fastq record.
 /// Each Read contains multiple different strings of different types.
+///
+/// Uses 1-indexed conventions, like Name(1) and Seq(1), to follow fastq file naming conventions.
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub enum StrType {
-    Name1,
-    Seq1,
-    Name2,
-    Seq2,
-    Index1,
-    Index2,
+    Name(u8),
+    Seq(u8),
 }
 
 /// A fastq read.
@@ -452,6 +450,12 @@ impl Mapping {
 }
 
 impl Read {
+    pub fn new() -> Self {
+        Self {
+            str_mappings: Vec::new(),
+        }
+    }
+
     pub fn has_names(&self, names: &[crate::expr::LabelOrAttr]) -> bool {
         for name in names {
             match name {
@@ -477,65 +481,27 @@ impl Read {
         return true;
     }
 
-    pub fn from_fastq1(
+    pub fn add_fastq(
+        &mut self,
+        str_type_idx: u8,
         name: &[u8],
         seq: &[u8],
         qual: &[u8],
         origin: Arc<Origin>,
         idx: usize,
-    ) -> Self {
+    ) {
         let name = StrMappings::new(name.to_owned(), Arc::clone(&origin), idx);
         let seq = StrMappings::new_with_qual(seq.to_owned(), qual.to_owned(), origin, idx);
-
-        Self {
-            str_mappings: vec![(StrType::Name1, name), (StrType::Seq1, seq)],
-        }
+        self.str_mappings.push((StrType::Name(str_type_idx), name));
+        self.str_mappings.push((StrType::Seq(str_type_idx), seq));
     }
 
-    pub fn from_fastq2(
-        name1: &[u8],
-        seq1: &[u8],
-        qual1: &[u8],
-        origin1: Arc<Origin>,
-        idx1: usize,
-        name2: &[u8],
-        seq2: &[u8],
-        qual2: &[u8],
-        origin2: Arc<Origin>,
-        idx2: usize,
-    ) -> Self {
-        let name1 = StrMappings::new(name1.to_owned(), Arc::clone(&origin1), idx1);
-        let seq1 = StrMappings::new_with_qual(seq1.to_owned(), qual1.to_owned(), origin1, idx1);
-        let name2 = StrMappings::new(name2.to_owned(), Arc::clone(&origin2), idx2);
-        let seq2 = StrMappings::new_with_qual(seq2.to_owned(), qual2.to_owned(), origin2, idx2);
-
-        Self {
-            str_mappings: vec![
-                (StrType::Name1, name1),
-                (StrType::Seq1, seq1),
-                (StrType::Name2, name2),
-                (StrType::Seq2, seq2),
-            ],
-        }
-    }
-
-    pub fn to_fastq1(&self) -> (&[u8], &[u8], &[u8]) {
-        let name = self.str_mappings(StrType::Name1).unwrap();
-        let seq = self.str_mappings(StrType::Seq1).unwrap();
-        (name.string(), seq.string(), seq.qual().unwrap())
-    }
-
-    pub fn to_fastq2(&self) -> Result<((&[u8], &[u8], &[u8]), (&[u8], &[u8], &[u8])), NameError> {
-        let name1 = self.str_mappings(StrType::Name1).unwrap();
-        let seq1 = self.str_mappings(StrType::Seq1).unwrap();
-        let name2 = self
-            .str_mappings(StrType::Name2)
-            .ok_or_else(|| NameError::NotInRead(Name::StrType(StrType::Name2)))?;
-        let seq2 = self.str_mappings(StrType::Seq2).unwrap();
-        Ok((
-            (name1.string(), seq1.string(), seq1.qual().unwrap()),
-            (name2.string(), seq2.string(), seq2.qual().unwrap()),
-        ))
+    pub fn to_fastq(&self, str_type_idx: u8) -> Result<(&[u8], &[u8], &[u8]), NameError> {
+        let name = self
+            .str_mappings(StrType::Name(str_type_idx))
+            .ok_or_else(|| NameError::NotInRead(Name::StrType(StrType::Name(str_type_idx))))?;
+        let seq = self.str_mappings(StrType::Seq(str_type_idx)).unwrap();
+        Ok((name.string(), seq.string(), seq.qual().unwrap()))
     }
 
     pub fn to_json(&self) -> String {
@@ -845,18 +811,32 @@ impl fmt::Debug for Data {
 impl StrType {
     pub fn new(str_type: &[u8]) -> Result<Self, errors::Error> {
         use StrType::*;
-        match str_type {
-            b"name1" => Ok(Name1),
-            b"seq1" => Ok(Seq1),
-            b"name2" => Ok(Name2),
-            b"seq2" => Ok(Seq2),
-            b"index1" => Ok(Index1),
-            b"index2" => Ok(Index2),
-            _ => Err(errors::Error::Parse {
+        if str_type.starts_with(b"name") {
+            let i = std::str::from_utf8(&str_type[4..])
+                .unwrap()
+                .parse::<u8>()
+                .map_err(|_| errors::Error::Parse {
+                    string: errors::utf8(str_type),
+                    context: errors::utf8(str_type),
+                    reason: "not a known valid string type. Expected \"name1\", \"name2\", etc.",
+                })?;
+            Ok(Name(i))
+        } else if str_type.starts_with(b"seq") {
+            let i = std::str::from_utf8(&str_type[3..])
+                .unwrap()
+                .parse::<u8>()
+                .map_err(|_| errors::Error::Parse {
+                    string: errors::utf8(str_type),
+                    context: errors::utf8(str_type),
+                    reason: "not a known valid string type. Expected \"seq1\", \"seq2\", etc.",
+                })?;
+            Ok(Seq(i))
+        } else {
+            Err(errors::Error::Parse {
                 string: errors::utf8(str_type),
                 context: errors::utf8(str_type),
                 reason: "not a known valid string type. Expected \"name1\", \"seq1\", etc.",
-            }),
+            })
         }
     }
 }
@@ -865,12 +845,8 @@ impl fmt::Display for StrType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use StrType::*;
         match self {
-            Name1 => write!(f, "name1"),
-            Seq1 => write!(f, "seq1"),
-            Name2 => write!(f, "name2"),
-            Seq2 => write!(f, "seq2"),
-            Index1 => write!(f, "index1"),
-            Index2 => write!(f, "index2"),
+            Name(i) => write!(f, "name{i}"),
+            Seq(i) => write!(f, "seq{i}"),
         }
     }
 }
@@ -891,7 +867,7 @@ impl fmt::Display for Origin {
 }
 
 #[derive(Serialize)]
-struct SerializableRead(FxHashMap<String, SerializableStrMapping>);
+pub(crate) struct SerializableRead(FxHashMap<String, SerializableStrMapping>);
 
 #[derive(Serialize)]
 struct SerializableStrMapping {

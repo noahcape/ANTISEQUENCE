@@ -27,7 +27,10 @@ AAAATTTTCCCCGGGGATATAT
     let adapters = ["ATATATATAT", "CGCGCGCGCG"];
 
     let mut g = Graph::new();
-    g.add(InputFastq1Node::from_interleaved_bytes(fastq).unwrap_or_else(|e| panic!("{e}")));
+    g.add(
+        InputFastqNode::from_interleaved_reader(fastq.as_slice(), 2)
+            .unwrap_or_else(|e| panic!("{e}")),
+    );
 
     // trim adapter
     g.add(MatchAnyNode::new(
@@ -76,6 +79,8 @@ AAAATTTTCCCCGGGGATATAT
     ));
     g.add(SetNode::new(label("seq1.*"), label("seq2.*")));
 
-    g.add(OutputFastqNode::new1("example_output/single_cell.fastq"));
+    g.add(OutputFastqFileNode::from_file(
+        "example_output/single_cell.fastq",
+    ));
     g.run().unwrap_or_else(|e| panic!("{e}"));
 }

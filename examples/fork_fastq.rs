@@ -4,7 +4,7 @@ use antisequence::*;
 
 fn main() {
     let mut g = Graph::new();
-    g.add(InputFastq1Node::new("example_data/simple.fastq").unwrap_or_else(|e| panic!("{e}")));
+    g.add(InputFastqNode::from_file("example_data/simple.fastq").unwrap_or_else(|e| panic!("{e}")));
     g.add(CutNode::new(tr!(seq1.* -> seq1.a, seq1.b), LeftEnd(3)));
 
     let mut fork = Graph::new();

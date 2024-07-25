@@ -8,41 +8,37 @@ use flate2::{write::GzEncoder, Compression};
 
 use crate::graph::*;
 
-pub struct OutputFastqNode {
+pub struct OutputFastqFileNode {
     required_names: Vec<LabelOrAttr>,
-    file_expr1: Expr,
-    file_expr2: Option<Expr>,
+    file_exprs: Vec<Expr>,
     file_writers: Mutex<FxHashMap<Vec<u8>, Arc<Mutex<dyn Write + Send>>>>,
 }
 
-impl OutputFastqNode {
-    const NAME: &'static str = "OutputFastqNode";
+impl OutputFastqFileNode {
+    const NAME: &'static str = "OutputFastqFileNode";
 
     /// Output reads (read 1 only) to a file whose path is specified by an expression.
-    pub fn new1(file_expr: impl Into<Expr>) -> Self {
+    pub fn from_file(file_expr: impl Into<Expr>) -> Self {
         let file_expr = file_expr.into();
 
         Self {
             required_names: file_expr.required_names(),
-            file_expr1: file_expr,
-            file_expr2: None,
+            file_exprs: vec![file_expr],
             file_writers: Mutex::new(FxHashMap::default()),
         }
     }
 
-    /// Output read 1 and read 2 to two separate files whose paths are specified by expressions.
-    ///
-    /// The reads will be interleaved if the file path expressions are the same.
-    pub fn new2(file_expr1: impl Into<Expr>, file_expr2: impl Into<Expr>) -> Self {
-        let file_expr1 = file_expr1.into();
-        let file_expr2 = file_expr2.into();
-        let mut required_names = file_expr1.required_names();
-        required_names.extend(file_expr2.required_names());
+    /// Output reads to separate files whose paths are specified by expressions.
+    pub fn from_files<E: Into<Expr>>(file_exprs: impl IntoIterator<Item = E>) -> Self {
+        let file_exprs = file_exprs.into_iter().map(|e| e.into()).collect::<Vec<_>>();
+        let required_names = file_exprs
+            .iter()
+            .flat_map(|e| e.required_names().into_iter())
+            .collect::<Vec<_>>();
 
         Self {
             required_names,
-            file_expr1,
-            file_expr2: Some(file_expr2),
+            file_exprs,
             file_writers: Mutex::new(FxHashMap::default()),
         }
     }
@@ -77,14 +73,14 @@ impl OutputFastqNode {
     }
 }
 
-impl GraphNode for OutputFastqNode {
+impl GraphNode for OutputFastqFileNode {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let Some(read) = read else {
             panic!("Expected some read!")
         };
 
-        let file_name1 =
-            self.file_expr1
+        for (i, file_expr) in self.file_exprs.iter().enumerate() {
+            let file_name = file_expr
                 .eval_bytes(&read, false)
                 .map_err(|e| Error::NameError {
                     source: e,
@@ -92,42 +88,19 @@ impl GraphNode for OutputFastqNode {
                     context: Self::NAME,
                 })?;
 
-        let locked_writer1 = self.get_writer(&file_name1).map_err(|e| Error::FileIo {
-            file: utf8(&file_name1),
-            source: Box::new(e),
-        })?;
-
-        if let Some(file_expr2) = &self.file_expr2 {
-            let file_name2 = file_expr2
-                .eval_bytes(&read, false)
-                .map_err(|e| Error::NameError {
-                    source: e,
-                    read: read.clone(),
-                    context: Self::NAME,
-                })?;
-
-            let locked_writer2 = self.get_writer(&file_name2).map_err(|e| Error::FileIo {
-                file: utf8(&file_name2),
+            let locked_writer = self.get_writer(&file_name).map_err(|e| Error::FileIo {
+                file: utf8(&file_name),
                 source: Box::new(e),
             })?;
 
-            let (record1, record2) = read.to_fastq2().map_err(|e| Error::NameError {
+            let record = read.to_fastq((i + 1) as _).map_err(|e| Error::NameError {
                 source: e,
                 read: read.clone(),
                 context: Self::NAME,
             })?;
-            // interleave records if the same file is specified twice
-            {
-                let mut writer1 = locked_writer1.lock().unwrap();
-                write_fastq_record(&mut *writer1, record1);
-            }
-            {
-                let mut writer2 = locked_writer2.lock().unwrap();
-                write_fastq_record(&mut *writer2, record2);
-            }
-        } else {
-            let mut writer1 = locked_writer1.lock().unwrap();
-            write_fastq_record(&mut *writer1, read.to_fastq1());
+
+            let mut writer = locked_writer.lock().unwrap();
+            write_fastq_record(&mut *writer, record);
         }
 
         Ok((Some(read), false))
@@ -135,6 +108,63 @@ impl GraphNode for OutputFastqNode {
 
     fn required_names(&self) -> &[LabelOrAttr] {
         &self.required_names
+    }
+
+    fn name(&self) -> &'static str {
+        Self::NAME
+    }
+}
+
+pub struct OutputFastqNode<'writer> {
+    writers: Vec<Mutex<Box<dyn Write + Send + 'writer>>>,
+}
+
+impl<'writer> OutputFastqNode<'writer> {
+    const NAME: &'static str = "OutputFastqNode";
+
+    /// Output reads (read 1 only) to a `Write`r.
+    pub fn from_writer(writer: impl Write + Send + 'writer) -> Self {
+        Self {
+            writers: vec![Mutex::new(Box::new(writer))],
+        }
+    }
+
+    /// Output reads to separate `Write`rs.
+    pub fn from_writers<W: Write + Send + 'writer>(writers: impl IntoIterator<Item = W>) -> Self {
+        Self {
+            writers: writers
+                .into_iter()
+                .map(|w| {
+                    let w: Box<dyn Write + Send + 'writer> = Box::new(w);
+                    Mutex::new(w)
+                })
+                .collect(),
+        }
+    }
+}
+
+impl<'writer> GraphNode for OutputFastqNode<'writer> {
+    fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
+        let Some(read) = read else {
+            panic!("Expected some read!")
+        };
+
+        for (i, writer) in self.writers.iter().enumerate() {
+            let record = read.to_fastq((i + 1) as _).map_err(|e| Error::NameError {
+                source: e,
+                read: read.clone(),
+                context: Self::NAME,
+            })?;
+
+            let mut writer = writer.lock().unwrap();
+            write_fastq_record(&mut *writer, record);
+        }
+
+        Ok((Some(read), false))
+    }
+
+    fn required_names(&self) -> &[LabelOrAttr] {
+        &[]
     }
 
     fn name(&self) -> &'static str {
