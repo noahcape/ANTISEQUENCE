@@ -1,11 +1,11 @@
 use crate::graph::*;
 
-pub struct ForEachNode<F: Fn(&mut Read) + Send + Sync> {
+pub struct ForEachOp<F: Fn(&mut Read) + Send + Sync> {
     func: F,
 }
 
-impl<F: Fn(&mut Read) + Send + Sync> ForEachNode<F> {
-    const NAME: &'static str = "ForEachNode";
+impl<F: Fn(&mut Read) + Send + Sync> ForEachOp<F> {
+    const NAME: &'static str = "ForEachOp";
 
     /// Apply an arbitrary function on each read.
     pub fn new(func: F) -> Self {
@@ -13,7 +13,7 @@ impl<F: Fn(&mut Read) + Send + Sync> ForEachNode<F> {
     }
 }
 
-impl<F: Fn(&mut Read) + Send + Sync> GraphNode for ForEachNode<F> {
+impl<F: Fn(&mut Read) + Send + Sync> GraphNode for ForEachOp<F> {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let Some(mut read) = read else {
             panic!("Expected some read!")
@@ -31,20 +31,20 @@ impl<F: Fn(&mut Read) + Send + Sync> GraphNode for ForEachNode<F> {
     }
 }
 
-pub struct DbgNode;
+pub struct DbgOp;
 
-impl DbgNode {
+impl DbgOp {
     /// Print each read to standard error.
-    pub fn new() -> ForEachNode<impl Fn(&mut Read) + Send + Sync> {
-        ForEachNode::new(|read| eprintln!("{read}"))
+    pub fn new() -> ForEachOp<impl Fn(&mut Read) + Send + Sync> {
+        ForEachOp::new(|read| eprintln!("{read}"))
     }
 }
 
-pub struct RemoveInternalNode;
+pub struct RemoveInternalOp;
 
-impl RemoveInternalNode {
+impl RemoveInternalOp {
     /// Remove mappings with labels that start with `_` ("internal" mappings).
-    pub fn new() -> ForEachNode<impl Fn(&mut Read) + Send + Sync> {
-        ForEachNode::new(|read| read.remove_internal())
+    pub fn new() -> ForEachOp<impl Fn(&mut Read) + Send + Sync> {
+        ForEachOp::new(|read| read.remove_internal())
     }
 }

@@ -1,12 +1,12 @@
 use crate::graph::*;
 
-pub struct RetainNode {
+pub struct RetainOp {
     required_names: Vec<LabelOrAttr>,
     selector_expr: Expr,
 }
 
-impl RetainNode {
-    const NAME: &'static str = "RetainNode";
+impl RetainOp {
+    const NAME: &'static str = "RetainOp";
 
     /// Retain only the reads where the selector expression evaluates to true and discard the rest.
     pub fn new(selector_expr: impl Into<Expr>) -> Self {
@@ -18,7 +18,7 @@ impl RetainNode {
     }
 }
 
-impl GraphNode for RetainNode {
+impl GraphNode for RetainOp {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let Some(read) = read else {
             panic!("Expected some read!")

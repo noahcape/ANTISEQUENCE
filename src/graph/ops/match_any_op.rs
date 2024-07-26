@@ -10,7 +10,7 @@ use std::marker::Send;
 use crate::graph::*;
 use crate::Patterns;
 
-pub struct MatchAnyNode {
+pub struct MatchAnyOp {
     required_names: Vec<LabelOrAttr>,
     label: Label,
     new_labels: [Option<Label>; 3],
@@ -19,8 +19,8 @@ pub struct MatchAnyNode {
     aligner: ThreadLocal<Option<RefCell<Box<dyn Aligner + Send>>>>,
 }
 
-impl MatchAnyNode {
-    const NAME: &'static str = "MatchAnyNode";
+impl MatchAnyOp {
+    const NAME: &'static str = "MatchAnyOp";
 
     /// Match any one of multiple patterns in an interval.
     ///
@@ -57,7 +57,7 @@ impl MatchAnyNode {
     }
 }
 
-impl GraphNode for MatchAnyNode {
+impl GraphNode for MatchAnyOp {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let Some(mut read) = read else {
             panic!("Expected some read!")

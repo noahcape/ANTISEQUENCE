@@ -1,6 +1,6 @@
 use crate::graph::*;
 
-pub struct CutNode {
+pub struct CutOp {
     required_names: Vec<LabelOrAttr>,
     cut_label: Label,
     new_label1: Option<Label>,
@@ -8,8 +8,8 @@ pub struct CutNode {
     cut_idx: EndIdx,
 }
 
-impl CutNode {
-    const NAME: &'static str = "CutNode";
+impl CutOp {
+    const NAME: &'static str = "CutOp";
 
     /// Cut a labeled interval at the specified index to create two new intervals.
     ///
@@ -30,7 +30,7 @@ impl CutNode {
     }
 }
 
-impl GraphNode for CutNode {
+impl GraphNode for CutOp {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let Some(mut read) = read else {
             panic!("Expected some read!")

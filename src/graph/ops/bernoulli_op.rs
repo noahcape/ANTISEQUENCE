@@ -4,14 +4,14 @@ use rand_xoshiro::Xoshiro256PlusPlus;
 
 use crate::graph::*;
 
-pub struct BernoulliNode {
+pub struct BernoulliOp {
     attr: Attr,
     bernoulli: Bernoulli,
     seed: u64,
 }
 
-impl BernoulliNode {
-    const NAME: &'static str = "BernoulliNode";
+impl BernoulliOp {
+    const NAME: &'static str = "BernoulliOp";
 
     /// Set the attribute `attr` to a sampled boolean from a Bernoulli distribution
     /// with probability `prob` of true.
@@ -28,7 +28,7 @@ impl BernoulliNode {
     }
 }
 
-impl GraphNode for BernoulliNode {
+impl GraphNode for BernoulliOp {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let Some(mut read) = read else {
             panic!("Expected some read!")

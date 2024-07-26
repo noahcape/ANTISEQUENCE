@@ -1,6 +1,6 @@
 use std::fmt;
 
-const LEN: usize = 16usize;
+const LEN: usize = 24usize;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 #[repr(align(8))]

@@ -13,15 +13,15 @@ use crate::graph::*;
 
 const CHUNK_SIZE: usize = 256;
 
-pub struct InputFastqNode<'reader> {
+pub struct InputFastqOp<'reader> {
     readers: Vec<(Mutex<Box<dyn FastxReader + 'reader>>, Arc<Origin>)>,
     buf: ThreadLocal<RefCell<VecDeque<Read>>>,
     idx: AtomicUsize,
     interleaved: usize,
 }
 
-impl<'reader> InputFastqNode<'reader> {
-    const NAME: &'static str = "InputFastqNode";
+impl<'reader> InputFastqOp<'reader> {
+    const NAME: &'static str = "InputFastqOp";
 
     /// Stream reads created from fastq records from an input file.
     pub fn from_file(file: impl AsRef<str>) -> Result<Self> {
@@ -126,7 +126,7 @@ impl<'reader> InputFastqNode<'reader> {
     }
 }
 
-impl<'reader> GraphNode for InputFastqNode<'reader> {
+impl<'reader> GraphNode for InputFastqOp<'reader> {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         assert!(read.is_none(), "Expected no input reads for {}", Self::NAME);
 

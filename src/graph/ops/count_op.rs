@@ -2,14 +2,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::graph::*;
 
-pub struct CountNode {
+pub struct CountOp {
     required_names: Vec<LabelOrAttr>,
     selector_exprs: Vec<Expr>,
     counts: Vec<AtomicUsize>,
 }
 
-impl CountNode {
-    const NAME: &'static str = "CountNode";
+impl CountOp {
+    const NAME: &'static str = "CountOp";
 
     /// For each selector expression, count the number of reads where the expression evaluates to
     /// true.
@@ -41,7 +41,7 @@ impl CountNode {
     }
 }
 
-impl GraphNode for CountNode {
+impl GraphNode for CountOp {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let Some(read) = read else {
             panic!("Expected some read!")

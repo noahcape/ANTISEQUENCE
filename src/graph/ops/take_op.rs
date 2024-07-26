@@ -1,11 +1,11 @@
 use crate::graph::*;
 
-pub struct TakeNode<B: RangeBounds<usize> + Send + Sync> {
+pub struct TakeOp<B: RangeBounds<usize> + Send + Sync> {
     bounds: B,
 }
 
-impl<B: RangeBounds<usize> + Send + Sync> TakeNode<B> {
-    const NAME: &'static str = "TakeNode";
+impl<B: RangeBounds<usize> + Send + Sync> TakeOp<B> {
+    const NAME: &'static str = "TakeOp";
 
     /// Take only the reads that have a record index inside the specified bounds.
     pub fn new(bounds: B) -> Self {
@@ -13,7 +13,7 @@ impl<B: RangeBounds<usize> + Send + Sync> TakeNode<B> {
     }
 }
 
-impl<B: RangeBounds<usize> + Send + Sync> GraphNode for TakeNode<B> {
+impl<B: RangeBounds<usize> + Send + Sync> GraphNode for TakeOp<B> {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let Some(read) = read else {
             panic!("Expected some read!")

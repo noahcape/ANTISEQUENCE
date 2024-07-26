@@ -1,11 +1,11 @@
 use crate::graph::*;
 
-pub struct ForkNode {
+pub struct ForkOp {
     graph: Graph,
 }
 
-impl ForkNode {
-    const NAME: &'static str = "ForkNode";
+impl ForkOp {
+    const NAME: &'static str = "ForkOp";
 
     /// Clone each read and run the clone through the specified graph, while leaving
     /// the original read unchanged.
@@ -14,7 +14,7 @@ impl ForkNode {
     }
 }
 
-impl GraphNode for ForkNode {
+impl GraphNode for ForkOp {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let Some(read) = read else {
             panic!("Expected some read!")

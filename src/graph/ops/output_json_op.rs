@@ -8,12 +8,12 @@ use flate2::{write::GzEncoder, Compression};
 
 use crate::graph::*;
 
-pub struct OutputJsonNode<'writer> {
+pub struct OutputJsonOp<'writer> {
     writer: Mutex<Box<dyn Write + Send + 'writer>>,
 }
 
-impl<'writer> OutputJsonNode<'writer> {
-    const NAME: &'static str = "OutputJsonNode";
+impl<'writer> OutputJsonOp<'writer> {
+    const NAME: &'static str = "OutputJsonOp";
 
     /// Output reads to a file in JSONL format.
     pub fn from_file(file: impl AsRef<str>) -> std::io::Result<Self> {
@@ -43,7 +43,7 @@ impl<'writer> OutputJsonNode<'writer> {
     }
 }
 
-impl<'writer> GraphNode for OutputJsonNode<'writer> {
+impl<'writer> GraphNode for OutputJsonOp<'writer> {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let Some(read) = read else {
             panic!("Expected some read!")

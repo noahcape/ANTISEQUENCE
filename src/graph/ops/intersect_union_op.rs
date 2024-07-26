@@ -1,14 +1,14 @@
 use crate::graph::*;
 
-pub struct IntersectNode {
+pub struct IntersectOp {
     required_names: Vec<LabelOrAttr>,
     label1: Label,
     label2: Label,
     new_label: Option<Label>,
 }
 
-impl IntersectNode {
-    const NAME: &'static str = "IntersectNode";
+impl IntersectOp {
+    const NAME: &'static str = "IntersectOp";
 
     /// Intersect two labeled intervals and create a new interval of the intersection, if it is not empty.
     ///
@@ -31,7 +31,7 @@ impl IntersectNode {
     }
 }
 
-impl GraphNode for IntersectNode {
+impl GraphNode for IntersectOp {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let Some(mut read) = read else {
             panic!("Expected some read!")
@@ -61,15 +61,15 @@ impl GraphNode for IntersectNode {
     }
 }
 
-pub struct UnionNode {
+pub struct UnionOp {
     required_names: Vec<LabelOrAttr>,
     label1: Label,
     label2: Label,
     new_label: Option<Label>,
 }
 
-impl UnionNode {
-    const NAME: &'static str = "UnionNode";
+impl UnionOp {
+    const NAME: &'static str = "UnionOp";
 
     /// Union two labeled intervals and create a new interval of the union.
     ///
@@ -95,7 +95,7 @@ impl UnionNode {
     }
 }
 
-impl GraphNode for UnionNode {
+impl GraphNode for UnionOp {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let Some(mut read) = read else {
             panic!("Expected some read!")

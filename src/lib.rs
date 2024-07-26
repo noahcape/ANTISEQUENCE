@@ -14,11 +14,13 @@
 //! and add them to a [`Graph`]. Then, you run the graph, which executes all the operations on each
 //! read.
 //!
-//! See [`node`] for all supported operations.
+//! See [`graph`] for all supported operations.
 //!
-//! TODO: update docs below
+//! Each operation in a graph contains a set of dependencies, which are labels and attributes
+//! that the operation requires to be present in the read. If the dependencies are not present,
+//! then the operation will be skipped.
 //!
-//! ## Read structure
+//! ## Reads
 //! Here's an example fastq record:
 //! ```
 //! @read6
@@ -46,42 +48,36 @@
 //! Each `Read` is a set of *strings* of different *types*. Types help indicate whether the string is
 //! a read sequence (`seq1`) or read name (`name1`).
 //!
-//! Each string has associated *mappings*. Each mapping is a *label* and an *interval* in the string.
-//! For example, mappings can label the region where an adapter is found in the read sequence.
-//! All strings start with a mapping labeled `*`, which spans the whole string.
-//! You can refer to a mapping with `seq1.*`, `seq1.adapter`, `name1.*`, etc.
+//! Each string has associated *labeled intervals* in the string.
+//! For example, the region where an adapter is found in the read sequence can be labeled.
+//! All strings start with an interval labeled `*`, which spans the whole string.
+//! You can refer to an interval with `seq1.*`, `seq1.adapter`, `name1.*`, etc.
 //!
-//! A mapping can contain *attributes* that hold arbitrary metadata. This may include a boolean for
+//! An interval can contain *attributes* that hold arbitrary metadata. This may include a boolean for
 //! whether to filter the read, or the name of the pattern that the read matches.
 //! You can refer to an attribute with `seq1.*.adapter`, etc.
 //!
-//! Note that for efficiency and simplicity, most ANTISEQUENCE operations only manipulate the mappings
+//! For efficiency and simplicity, most ANTISEQUENCE operations only manipulate the intervals
 //! and attributes. You can choose to modify the underlying strings afterwards.
-//!
-//! ## Selector expressions
-//! Selector expressions allow you to filter for reads that satisfy a boolean expression.
-//! This is useful for choosing which reads to output or trimming reads that have a certain
-//! pattern.
-//! Many operations take a selector expression as the first parameter, which specifies
-//! the reads that the operation is performed on.
-//!
-//! Here are some example selector expressions:
-//! * `sel!()`: select all reads
-//! * `sel!(seq1.adapter)`: select only reads with the `adapter` mapping in its sequence
-//! * `sel!(seq1.adapter & !seq1.*.discard)`: arbitrary boolean expression!
 //!
 //! ## Transform expressions
 //! Transform expressions allow you to specify the names of the inputs and outputs
-//! for an operation. For example, to cut a mapping interval and create two new mappings,
+//! for an operation. For example, to cut an interval and create two new intervals,
 //! you can use `tr!(seq1.* -> seq1.left, seq1.right)`.
 //!
-//! ## Format expressions
-//! Format expressions allow you to contruct new strings from mappings and attributes,
-//! and they are similar to Rust's formatting syntax. For example, you can use `"{seq1.a}_{seq1.b}"`
-//! to concatenate the substrings corresponding to mappings `a` and `b`, separated by an
-//! underscore. A string can also be repeated, like `"{'A'; 4}"`, which results in `AAAA`.
+//! ## Expressions
+//! Expressions are useful for doing arbitrary computation on reads. Here are some examples:
+//! * `label_exists("seq1.label").and(attr_exists("seq1.*.attribute"))`
+//! * `Expr::from(label("seq1.label")).slice(..3)`
+//! * `Expr::from(label("seq1.label")).len().in_bounds(10..20)`
 //!
-//! Format expressions are useful for rearranging and modifying strings.
+//! Supported data types are: byte string, int, float, and boolean.
+//!
+//! ### Format expressions
+//! Format expressions allow you to contruct new strings from intervals and attributes,
+//! and they are similar to Rust's formatting syntax. For example, you can use `fmt_expr("{seq1.a}_{seq1.b}")`
+//! to concatenate the substrings corresponding to mappings `a` and `b`, separated by an
+//! underscore.
 //! They also preserve quality scores, making rearranging regions in a read easy.
 
 pub mod errors;

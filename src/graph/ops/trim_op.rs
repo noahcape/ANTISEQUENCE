@@ -1,12 +1,12 @@
 use crate::graph::*;
 
-pub struct TrimNode {
+pub struct TrimOp {
     required_names: Vec<LabelOrAttr>,
     labels: Vec<Label>,
 }
 
-impl TrimNode {
-    const NAME: &'static str = "TrimNode";
+impl TrimOp {
+    const NAME: &'static str = "TrimOp";
 
     /// Trim the intervals of the specified labels by splicing them out of the underlying strings.
     ///
@@ -22,7 +22,7 @@ impl TrimNode {
     }
 }
 
-impl GraphNode for TrimNode {
+impl GraphNode for TrimOp {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let Some(mut read) = read else {
             panic!("Expected some read!")

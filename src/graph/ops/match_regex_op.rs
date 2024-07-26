@@ -5,7 +5,7 @@ use thread_local::*;
 use crate::graph::*;
 use crate::inline_string::*;
 
-pub struct MatchRegexNode {
+pub struct MatchRegexOp {
     required_names: Vec<LabelOrAttr>,
     label: Label,
     attr: Option<Attr>,
@@ -13,8 +13,8 @@ pub struct MatchRegexNode {
     regex_local: ThreadLocal<Regex>,
 }
 
-impl MatchRegexNode {
-    const NAME: &'static str = "MatchRegexNode";
+impl MatchRegexOp {
+    const NAME: &'static str = "MatchRegexOp";
 
     /// Match a regex pattern in an interval.
     ///
@@ -40,7 +40,7 @@ impl MatchRegexNode {
     }
 }
 
-impl GraphNode for MatchRegexNode {
+impl GraphNode for MatchRegexOp {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let Some(mut read) = read else {
             panic!("Expected some read!")

@@ -1,13 +1,13 @@
 use crate::graph::*;
 
-pub struct SetNode {
+pub struct SetOp {
     required_names: Vec<LabelOrAttr>,
     label_or_attr: LabelOrAttr,
     expr: Expr,
 }
 
-impl SetNode {
-    const NAME: &'static str = "SetNode";
+impl SetOp {
+    const NAME: &'static str = "SetOp";
 
     /// Set a labeled interval or attribute to the result of an expression.
     ///
@@ -33,7 +33,7 @@ impl SetNode {
     }
 }
 
-impl GraphNode for SetNode {
+impl GraphNode for SetOp {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let Some(mut read) = read else {
             panic!("Expected some read!")

@@ -4,9 +4,9 @@ use antisequence::*;
 
 fn main() {
     let mut g = Graph::new();
-    g.add(InputFastqNode::from_file("example_data/match.fastq").unwrap_or_else(|e| panic!("{e}")));
+    g.add(InputFastqOp::from_file("example_data/match.fastq").unwrap_or_else(|e| panic!("{e}")));
     let patterns = Patterns::from_strs(["AAAA", "TTTT"]);
-    g.add(MatchAnyNode::new(
+    g.add(MatchAnyOp::new(
         tr!(seq1.* -> seq1.template, seq1.adapter),
         patterns,
         SuffixAln {
@@ -14,9 +14,9 @@ fn main() {
             overlap: 0.5,
         },
     ));
-    g.add(DbgNode::new());
-    g.add(TrimNode::new([label("seq1.adapter")]));
-    g.add(DbgNode::new());
-    g.add(OutputFastqFileNode::from_file("example_output/match.fastq"));
+    g.add(DbgOp::new());
+    g.add(TrimOp::new([label("seq1.adapter")]));
+    g.add(DbgOp::new());
+    g.add(OutputFastqFileOp::from_file("example_output/match.fastq"));
     g.run().unwrap_or_else(|e| panic!("{e}"));
 }

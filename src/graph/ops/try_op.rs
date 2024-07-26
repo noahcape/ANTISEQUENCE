@@ -1,12 +1,12 @@
 use crate::graph::*;
 
-pub struct TryNode {
+pub struct TryOp {
     try_graph: Graph,
     catch_graph: Graph,
 }
 
-impl TryNode {
-    const NAME: &'static str = "TryNode";
+impl TryOp {
+    const NAME: &'static str = "TryOp";
 
     /// Run reads through the try graph, remove the ones that have skipped an operation,
     /// and then run the skipped reads through the catch graph.
@@ -23,7 +23,7 @@ impl TryNode {
     }
 }
 
-impl GraphNode for TryNode {
+impl GraphNode for TryOp {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let (read, failed, done) = self.try_graph.try_run_one(read)?;
 

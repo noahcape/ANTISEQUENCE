@@ -5,13 +5,13 @@ use std::time::{Duration, Instant};
 
 use crate::graph::*;
 
-pub struct TimeNode {
+pub struct TimeOp {
     duration: ThreadLocal<Cell<Duration>>,
     graph: Graph,
 }
 
-impl TimeNode {
-    const NAME: &'static str = "TimeNode";
+impl TimeOp {
+    const NAME: &'static str = "TimeOp";
 
     /// Track the runtime of the graph.
     pub fn new(graph: Graph) -> Self {
@@ -28,7 +28,7 @@ impl TimeNode {
     }
 }
 
-impl GraphNode for TimeNode {
+impl GraphNode for TimeOp {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let start = Instant::now();
         let res = self.graph.run_one(read);

@@ -1,6 +1,6 @@
 use crate::graph::*;
 
-pub struct MatchPolyXNode {
+pub struct MatchPolyXOp {
     required_names: Vec<LabelOrAttr>,
     label: Label,
     new_label1: Option<Label>,
@@ -10,8 +10,8 @@ pub struct MatchPolyXNode {
     identity: f64,
 }
 
-impl MatchPolyXNode {
-    const NAME: &'static str = "MatchPolyXNode";
+impl MatchPolyXOp {
+    const NAME: &'static str = "MatchPolyXOp";
 
     /// Match repeated characters from the left or right end of an interval.
     ///
@@ -34,7 +34,7 @@ impl MatchPolyXNode {
     }
 }
 
-impl GraphNode for MatchPolyXNode {
+impl GraphNode for MatchPolyXOp {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let Some(mut read) = read else {
             panic!("Expected some read!")

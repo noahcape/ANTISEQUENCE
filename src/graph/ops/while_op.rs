@@ -1,13 +1,13 @@
 use crate::graph::*;
 
-pub struct WhileNode {
+pub struct WhileOp {
     required_names: Vec<LabelOrAttr>,
     cond_expr: Expr,
     graph: Graph,
 }
 
-impl WhileNode {
-    const NAME: &'static str = "WhileNode";
+impl WhileOp {
+    const NAME: &'static str = "WhileOp";
 
     /// Run a read through the graph multiple times, while the condition expression evaluates to true.
     pub fn new(cond_expr: impl Into<Expr>, graph: Graph) -> Self {
@@ -21,7 +21,7 @@ impl WhileNode {
     }
 }
 
-impl GraphNode for WhileNode {
+impl GraphNode for WhileOp {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let Some(mut read) = read else {
             panic!("Expected some read!")

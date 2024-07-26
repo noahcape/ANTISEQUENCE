@@ -8,14 +8,14 @@ use flate2::{write::GzEncoder, Compression};
 
 use crate::graph::*;
 
-pub struct OutputFastqFileNode {
+pub struct OutputFastqFileOp {
     required_names: Vec<LabelOrAttr>,
     file_exprs: Vec<Expr>,
     file_writers: Mutex<FxHashMap<Vec<u8>, Arc<Mutex<dyn Write + Send>>>>,
 }
 
-impl OutputFastqFileNode {
-    const NAME: &'static str = "OutputFastqFileNode";
+impl OutputFastqFileOp {
+    const NAME: &'static str = "OutputFastqFileOp";
 
     /// Output reads (read 1 only) to a file whose path is specified by an expression.
     pub fn from_file(file_expr: impl Into<Expr>) -> Self {
@@ -73,7 +73,7 @@ impl OutputFastqFileNode {
     }
 }
 
-impl GraphNode for OutputFastqFileNode {
+impl GraphNode for OutputFastqFileOp {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let Some(read) = read else {
             panic!("Expected some read!")
@@ -115,12 +115,12 @@ impl GraphNode for OutputFastqFileNode {
     }
 }
 
-pub struct OutputFastqNode<'writer> {
+pub struct OutputFastqOp<'writer> {
     writers: Vec<Mutex<Box<dyn Write + Send + 'writer>>>,
 }
 
-impl<'writer> OutputFastqNode<'writer> {
-    const NAME: &'static str = "OutputFastqNode";
+impl<'writer> OutputFastqOp<'writer> {
+    const NAME: &'static str = "OutputFastqOp";
 
     /// Output reads (read 1 only) to a `Write`r.
     pub fn from_writer(writer: impl Write + Send + 'writer) -> Self {
@@ -143,7 +143,7 @@ impl<'writer> OutputFastqNode<'writer> {
     }
 }
 
-impl<'writer> GraphNode for OutputFastqNode<'writer> {
+impl<'writer> GraphNode for OutputFastqOp<'writer> {
     fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
         let Some(read) = read else {
             panic!("Expected some read!")

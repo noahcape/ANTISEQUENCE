@@ -7,8 +7,8 @@ use crate::errors::*;
 use crate::expr::*;
 use crate::read::*;
 
-mod node;
-pub use node::*;
+mod ops;
+pub use ops::*;
 
 /// Computation graph of read operations, where each operation is a node.
 pub struct Graph {

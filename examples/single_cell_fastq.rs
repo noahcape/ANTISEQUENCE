@@ -28,12 +28,12 @@ AAAATTTTCCCCGGGGATATAT
 
     let mut g = Graph::new();
     g.add(
-        InputFastqNode::from_interleaved_reader(fastq.as_slice(), 2)
+        InputFastqOp::from_interleaved_reader(fastq.as_slice(), 2)
             .unwrap_or_else(|e| panic!("{e}")),
     );
 
     // trim adapter
-    g.add(MatchAnyNode::new(
+    g.add(MatchAnyOp::new(
         tr!(seq2.* -> _, seq2.adapter),
         Patterns::from_strs(adapters),
         SuffixAln {
@@ -41,31 +41,28 @@ AAAATTTTCCCCGGGGATATAT
             overlap: 0.4,
         },
     ));
-    g.add(DbgNode::new());
-    g.add(TrimNode::new([label("seq2.adapter")]));
+    g.add(DbgOp::new());
+    g.add(TrimOp::new([label("seq2.adapter")]));
 
     // match anchor
-    g.add(MatchAnyNode::new(
+    g.add(MatchAnyOp::new(
         tr!(seq1.* -> seq1.bc1, _, seq1._after_anchor),
         Patterns::from_strs(["CAGAGC"]),
         HammingSearch(Frac(0.8)),
     ));
 
     // split the UMI from the rest of the sequence
-    g.add(CutNode::new(
+    g.add(CutOp::new(
         tr!(seq1._after_anchor -> seq1.umi, seq1._after_umi),
         LeftEnd(8),
     ));
 
     // clip the length of the second barcode
-    g.add(CutNode::new(
-        tr!(seq1._after_umi -> seq1.bc2, _),
-        LeftEnd(10),
-    ));
-    g.add(DbgNode::new());
+    g.add(CutOp::new(tr!(seq1._after_umi -> seq1.bc2, _), LeftEnd(10)));
+    g.add(DbgOp::new());
 
     // filter out invalid reads
-    g.add(RetainNode::new(
+    g.add(RetainOp::new(
         label_exists("seq1.bc1")
             .and(label_exists("seq1.bc2"))
             .and(Expr::from(label("seq1.bc1")).len().in_bounds(9..=11))
@@ -73,13 +70,13 @@ AAAATTTTCCCCGGGGATATAT
     ));
 
     // move the UMI and barcodes to the read name
-    g.add(SetNode::new(
+    g.add(SetOp::new(
         label("name1.*"),
         fmt_expr("{name1.*}_{seq1.umi}_{seq1.bc1}{seq1.bc2}"),
     ));
-    g.add(SetNode::new(label("seq1.*"), label("seq2.*")));
+    g.add(SetOp::new(label("seq1.*"), label("seq2.*")));
 
-    g.add(OutputFastqFileNode::from_file(
+    g.add(OutputFastqFileOp::from_file(
         "example_output/single_cell.fastq",
     ));
     g.run().unwrap_or_else(|e| panic!("{e}"));
