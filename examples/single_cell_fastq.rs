@@ -54,11 +54,11 @@ AAAATTTTCCCCGGGGATATAT
     // split the UMI from the rest of the sequence
     g.add(CutOp::new(
         tr!(seq1._after_anchor -> seq1.umi, seq1._after_umi),
-        LeftEnd(8),
+        8,
     ));
 
     // clip the length of the second barcode
-    g.add(CutOp::new(tr!(seq1._after_umi -> seq1.bc2, _), LeftEnd(10)));
+    g.add(CutOp::new(tr!(seq1._after_umi -> seq1.bc2, _), 10));
     g.add(DbgOp::new());
 
     // filter out invalid reads

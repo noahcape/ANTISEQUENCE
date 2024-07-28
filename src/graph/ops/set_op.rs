@@ -95,7 +95,7 @@ impl GraphNode for SetOp {
                 // panic to make borrow checker happy
                 *read
                     .data_mut(attr.str_type, attr.label, attr.attr)
-                    .unwrap_or_else(|e| panic!("Error in {}: {e}", Self::NAME)) = new_val.to_data();
+                    .unwrap_or_else(|e| panic!("Error in {}: {e}", Self::NAME)) = new_val.into();
             }
         }
 

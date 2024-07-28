@@ -10,14 +10,6 @@ use crate::errors::{self, Name, NameError};
 use crate::inline_string::*;
 
 pub use End::*;
-pub use EndIdx::*;
-
-/// Specify the left or right end along with an index from that end.
-#[derive(Copy, Clone, PartialEq, Debug)]
-pub enum EndIdx {
-    LeftEnd(usize),
-    RightEnd(usize),
-}
 
 /// Left or right end.
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -135,7 +127,7 @@ impl StrMappings {
         label: InlineString,
         new_label1: Option<InlineString>,
         new_label2: Option<InlineString>,
-        cut_idx: EndIdx,
+        cut_idx: isize,
     ) -> Result<(), NameError> {
         let (start, len) = {
             let mapping = self
@@ -144,17 +136,14 @@ impl StrMappings {
             (mapping.start, mapping.len)
         };
 
-        match cut_idx {
-            LeftEnd(idx) => {
-                let cut = idx.min(len);
-                self.add_mapping(new_label1, start, cut);
-                self.add_mapping(new_label2, start + cut, len - cut);
-            }
-            RightEnd(idx) => {
-                let cut = idx.min(len);
-                self.add_mapping(new_label1, start, len - cut);
-                self.add_mapping(new_label2, start + len - cut, cut);
-            }
+        if cut_idx >= 0 {
+            let cut = (cut_idx as usize).min(len);
+            self.add_mapping(new_label1, start, cut);
+            self.add_mapping(new_label2, start + cut, len - cut);
+        } else {
+            let cut = ((-cut_idx) as usize).min(len);
+            self.add_mapping(new_label1, start, len - cut);
+            self.add_mapping(new_label2, start + len - cut, cut);
         }
 
         Ok(())
@@ -596,7 +585,7 @@ impl Read {
         label: InlineString,
         new_label1: Option<InlineString>,
         new_label2: Option<InlineString>,
-        cut_idx: EndIdx,
+        cut_idx: isize,
     ) -> Result<(), NameError> {
         self.str_mappings_mut(str_type)
             .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?
@@ -684,15 +673,6 @@ impl Data {
             Int(_) => Err(NameError::Type("bytes", vec![self.clone()])),
             Float(_) => Err(NameError::Type("bytes", vec![self.clone()])),
             Bytes(x) => Ok(x.len()),
-        }
-    }
-}
-
-impl EndIdx {
-    pub fn from_end(end: End, idx: usize) -> Self {
-        match end {
-            Left => LeftEnd(idx),
-            Right => RightEnd(idx),
         }
     }
 }
@@ -862,6 +842,15 @@ impl fmt::Display for Origin {
         match self {
             Origin::File(file) => write!(f, "file: \"{}\"", file),
             Origin::Bytes => write!(f, "bytes"),
+        }
+    }
+}
+
+impl End {
+    pub fn to_isize(&self, i: usize) -> isize {
+        match self {
+            Left => i as isize,
+            Right => -(i as isize),
         }
     }
 }

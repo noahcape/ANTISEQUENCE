@@ -5,7 +5,7 @@ pub struct CutOp {
     cut_label: Label,
     new_label1: Option<Label>,
     new_label2: Option<Label>,
-    cut_idx: EndIdx,
+    cut_idx: Expr,
 }
 
 impl CutOp {
@@ -16,7 +16,8 @@ impl CutOp {
     /// The transform expression must have one input label and two output labels.
     ///
     /// Example `transform_expr`: `tr!(seq1.* -> seq1.left, seq1.right)`.
-    pub fn new(transform_expr: TransformExpr, cut_idx: EndIdx) -> Self {
+    pub fn new(transform_expr: TransformExpr, cut_idx: impl Into<Expr>) -> Self {
+        let cut_idx = cut_idx.into();
         transform_expr.check_size(1, 2, Self::NAME);
         transform_expr.check_same_str_type(Self::NAME);
 
@@ -36,12 +37,18 @@ impl GraphNode for CutOp {
             panic!("Expected some read!")
         };
 
+        let cut_idx = self.cut_idx.eval_int(&read).map_err(|e| Error::NameError {
+            source: e,
+            read: read.clone(),
+            context: self.name(),
+        })?;
+
         read.cut(
             self.cut_label.str_type,
             self.cut_label.label,
             self.new_label1.as_ref().map(|l| l.label),
             self.new_label2.as_ref().map(|l| l.label),
-            self.cut_idx,
+            cut_idx,
         )
         .map_err(|e| Error::NameError {
             source: e,

@@ -8,7 +8,26 @@ use crate::read::*;
 
 const UNKNOWN_QUAL: u8 = b'I';
 
-pub static NUC_MAP: [u8; 4] = [b'A', b'C', b'T', b'G'];
+static NUC: [u8; 4] = [b'A', b'C', b'G', b'T'];
+static COMP_LUT: [u8; 256] = {
+    let mut l = [0u8; 256];
+    let mut i = 0;
+
+    while i < l.len() {
+        l[i] = i as u8;
+        i += 1;
+    }
+
+    l[b'A' as usize] = b'T';
+    l[b'C' as usize] = b'G';
+    l[b'G' as usize] = b'C';
+    l[b'T' as usize] = b'A';
+    l
+};
+
+pub fn log4_roundup(n: usize) -> usize {
+    (n.ilog2() + 1).div_ceil(2) as usize
+}
 
 /// One node in an expression tree.
 pub struct Expr {
@@ -36,10 +55,6 @@ macro_rules! unary_fn {
             }
         }
     };
-}
-
-pub fn log4_roundup(n: usize) -> usize {
-    (n.ilog2() + 1).div_ceil(2) as usize
 }
 
 impl Expr {
@@ -102,12 +117,12 @@ impl Expr {
         }
     }
 
-    pub fn pad(self, pad_char: Expr, num: Expr, end: End) -> Expr {
+    pub fn pad(self, pad_char: Expr, len: Expr, end: End) -> Expr {
         Expr {
             node: Box::new(PadNode {
                 string: self,
                 pad_char,
-                num,
+                len,
                 end,
             }),
         }
@@ -127,12 +142,12 @@ impl Expr {
 
     pub fn eval_bool<'a>(&'a self, read: &'a Read) -> std::result::Result<bool, NameError> {
         let res = self.eval(read, false)?;
+        expect_bool(res)
+    }
 
-        if let EvalData::Bool(b) = res {
-            Ok(b)
-        } else {
-            Err(NameError::Type("bool", vec![res.to_data()]))
-        }
+    pub fn eval_int<'a>(&'a self, read: &'a Read) -> std::result::Result<isize, NameError> {
+        let res = self.eval(read, false)?;
+        expect_int(res)
     }
 
     pub fn eval_bytes<'a>(
@@ -141,12 +156,7 @@ impl Expr {
         use_qual: bool,
     ) -> std::result::Result<Cow<'a, [u8]>, NameError> {
         let res = self.eval(read, use_qual)?;
-
-        if let EvalData::Bytes(b) = res {
-            Ok(b)
-        } else {
-            Err(NameError::Type("bytes", vec![res.to_data()]))
-        }
+        expect_bytes(res)
     }
 
     pub fn eval<'a>(
@@ -159,6 +169,17 @@ impl Expr {
 
     pub fn required_names(&self) -> Vec<LabelOrAttr> {
         self.node.required_names()
+    }
+
+    pub fn propagate_const(&mut self) {
+        if !self.required_names().is_empty() {
+            return;
+        }
+
+        // no read-specific dependencies
+        let temp = Read::new();
+        let data = self.eval(&temp, false).unwrap();
+        self.node = Box::new(Data::from(data));
     }
 }
 
@@ -190,7 +211,7 @@ macro_rules! bool_binary_ops {
                 use EvalData::*;
                 match (left, right) {
                     (Bool(l), Bool(r)) => Ok($bool_expr(l, r)),
-                    (l, r) => Err(NameError::Type("bool", vec![l.to_data(), r.to_data()])),
+                    (l, r) => Err(NameError::Type("bool", vec![l.into(), r.into()])),
                 }
             }
 
@@ -229,7 +250,7 @@ macro_rules! num_binary_ops {
                     (Float(l), Float(r)) => Ok($float_expr(l, r)),
                     (l, r) => Err(NameError::Type(
                         "both int or both float",
-                        vec![l.to_data(), r.to_data()],
+                        vec![l.into(), r.into()],
                     )),
                 }
             }
@@ -264,11 +285,7 @@ impl ExprNode for NotNode {
         use_qual: bool,
     ) -> std::result::Result<EvalData<'a>, NameError> {
         let boolean = self.boolean.eval(read, use_qual)?;
-        use EvalData::*;
-        match boolean {
-            Bool(b) => Ok(Bool(!b)),
-            b => Err(NameError::Type("bool", vec![b.to_data()])),
-        }
+        Ok(EvalData::Bool(!(expect_bool(boolean)?)))
     }
 
     fn required_names(&self) -> Vec<LabelOrAttr> {
@@ -297,7 +314,7 @@ impl ExprNode for EqNode {
             (Bytes(l), Bytes(r)) => Ok(Bool(l == r)),
             (l, r) => Err(NameError::Type(
                 "both are the same type",
-                vec![l.to_data(), r.to_data()],
+                vec![l.into(), r.into()],
             )),
         }
     }
@@ -320,105 +337,47 @@ impl ExprNode for NormalizeNode {
         read: &'a Read,
         use_qual: bool,
     ) -> std::result::Result<EvalData<'a>, NameError> {
-        let string = self.string.eval(read, use_qual)?;
+        let string = expect_bytes(self.string.eval(read, use_qual)?)?;
+        let range = map_eval_range(&self.range, read, use_qual, |b| b as usize)?;
+        let (start, end) = range_inclusive_exclusive(&range, std::usize::MAX);
 
-        use EvalData::*;
-        let string = match string {
-            Bytes(b) => b,
-            b => return Err(NameError::Type("bytes", vec![b.to_data()])),
-        };
-
-        let mut start_add1 = false;
-        let start = match self.range.start_bound() {
-            Bound::Included(s) => s.eval(read, use_qual)?,
-            Bound::Excluded(s) => {
-                start_add1 = true;
-                s.eval(read, use_qual)?
-            }
-            Bound::Unbounded => {
-                return Err(NameError::Type(
-                    "inclusive or exclusive bounds",
-                    vec![Data::Int(std::isize::MIN)],
-                ))
-            }
-        };
-
-        let mut end_sub1 = false;
-        let end = match self.range.end_bound() {
-            Bound::Included(e) => e.eval(read, use_qual)?,
-            Bound::Excluded(e) => {
-                end_sub1 = true;
-                e.eval(read, use_qual)?
-            }
-            Bound::Unbounded => {
-                return Err(NameError::Type(
-                    "inclusive or exclusive bounds",
-                    vec![Data::Int(std::isize::MAX)],
-                ))
-            }
-        };
-
-        let (start, end) = match (start, end) {
-            (Int(mut s), Int(mut e)) => {
-                if start_add1 {
-                    s += 1;
-                }
-
-                if end_sub1 {
-                    e -= 1;
-                }
-
-                (s, e)
-            }
-            (s, e) => return Err(NameError::Type("both int", vec![s.to_data(), e.to_data()])),
-        };
-
-        if end < string.len() as isize {
-            return Err(NameError::Type(
-                "range end to exceed length of interval",
-                vec![Data::Int(end)],
+        if end == std::usize::MAX {
+            return Err(NameError::Other(
+                "the end bound must be bounded for normalization",
+            ));
+        }
+        if end < string.len() {
+            return Err(NameError::Other(
+                "the string length is greater than the end bound",
             ));
         }
 
-        let mut length_diff = end as usize - string.len();
-        let extra_len = log4_roundup((end - start + 1) as usize);
+        let pad_len = end - string.len();
+        let var_len = log4_roundup(end - start);
 
-        let buff_char = if use_qual { UNKNOWN_QUAL } else { b'A' };
+        let mut normalized = string.into_owned();
+        let pad_char = if use_qual { UNKNOWN_QUAL } else { NUC[0] };
+        normalized.extend(std::iter::repeat(pad_char).take(pad_len));
 
-        let mut buff = [buff_char].repeat(length_diff);
-
-        let mut variable_seg = if use_qual {
-            [UNKNOWN_QUAL].repeat(extra_len)
+        if use_qual {
+            normalized.extend(std::iter::repeat(UNKNOWN_QUAL).take(var_len));
         } else {
-            let mut variable_seg = [b'0'].repeat(extra_len);
+            normalized.extend(
+                (0..var_len).map(|i| unsafe { *NUC.as_ptr().add((pad_len >> (i * 2)) & 0b11) }),
+            );
+        }
 
-            for i in 0..extra_len {
-                let nuc = NUC_MAP[length_diff & 0b11];
-                length_diff >>= 2;
-
-                variable_seg[i] = nuc;
-            }
-
-            variable_seg
-        };
-
-        let mut normalized = string.to_vec();
-        normalized.append(&mut buff);
-        normalized.append(&mut variable_seg);
-
-        Ok(Bytes(Cow::Owned(normalized)))
+        Ok(EvalData::Bytes(Cow::Owned(normalized)))
     }
 
     fn required_names(&self) -> Vec<LabelOrAttr> {
         let mut res = self.string.required_names();
-        match self.range.start_bound() {
-            Bound::Included(s) | Bound::Excluded(s) => res.append(&mut s.required_names()),
-            _ => (),
-        }
-        match self.range.end_bound() {
-            Bound::Included(e) | Bound::Excluded(e) => res.append(&mut e.required_names()),
-            _ => (),
-        }
+        self.range
+            .start_bound()
+            .map(|s| res.append(&mut s.required_names()));
+        self.range
+            .end_bound()
+            .map(|e| res.append(&mut e.required_names()));
         res
     }
 }
@@ -426,7 +385,7 @@ impl ExprNode for NormalizeNode {
 struct PadNode {
     string: Expr,
     pad_char: Expr,
-    num: Expr,
+    len: Expr,
     end: End,
 }
 
@@ -436,51 +395,43 @@ impl ExprNode for PadNode {
         read: &'a Read,
         use_qual: bool,
     ) -> std::result::Result<EvalData<'a>, NameError> {
-        let string = self.string.eval(read, use_qual)?;
-        let pad_char = self.pad_char.eval(read, use_qual)?;
-        let num = self.num.eval(read, use_qual)?;
+        let string = expect_bytes(self.string.eval(read, use_qual)?)?;
+        let pad_char = expect_bytes(self.pad_char.eval(read, use_qual)?)?;
+        let len = expect_int(self.len.eval(read, use_qual)?)? as usize;
 
-        use EvalData::*;
-        let string = match string {
-            Bytes(b) => b,
-            b => return Err(NameError::Type("bytes", vec![b.to_data()])),
-        };
-
-        let num = match num {
-            Int(n) => {
-                if string.len() as isize > n {
-                    return Err(NameError::Type(
-                        "usize longer than interval length",
-                        vec![num.to_data()],
-                    ));
-                }
-                n as usize
-            }
-            n => return Err(NameError::Type("int", vec![n.to_data()])),
-        };
-
-        let pad_char = match pad_char {
-            Bytes(b) => b,
-            b => return Err(NameError::Type("bytes", vec![b.to_data()])),
-        };
+        if string.len() > len {
+            return Err(NameError::Other(
+                "the length of the string is greater than the padded length",
+            ));
+        }
+        if pad_char.len() != 1 {
+            return Err(NameError::Other(
+                "the length of padding character must be 1",
+            ));
+        }
 
         let padded = match self.end {
             Left => {
-                let mut padded = pad_char.repeat(num - string.len());
-                padded.append(&mut string.to_vec());
-                padded
+                let mut padded = pad_char.repeat(len - string.len());
+                padded.extend_from_slice(&string);
+                Cow::Owned(padded)
             }
             Right => {
-                let mut padded = string.to_vec();
-                padded.append(&mut pad_char.repeat(num - string.len()));
+                let mut padded = string.to_owned();
+                padded
+                    .to_mut()
+                    .extend(std::iter::repeat(pad_char[0]).take(len - string.len()));
                 padded
             }
         };
-        Ok(Bytes(Cow::Owned(padded)))
+        Ok(EvalData::Bytes(padded))
     }
 
     fn required_names(&self) -> Vec<LabelOrAttr> {
-        self.string.required_names()
+        let mut res = self.string.required_names();
+        res.append(&mut self.pad_char.required_names());
+        res.append(&mut self.len.required_names());
+        res
     }
 }
 
@@ -495,23 +446,13 @@ impl ExprNode for RevCompNode {
         use_qual: bool,
     ) -> std::result::Result<EvalData<'a>, NameError> {
         let string = self.string.eval(read, use_qual)?;
-
-        use EvalData::*;
-        match string {
-            Bytes(b) => Ok(Bytes(Cow::Owned(
-                b.into_iter()
-                    .rev()
-                    .map(|e| match e {
-                        b'A' => b'T',
-                        b'T' => b'A',
-                        b'G' => b'C',
-                        b'C' => b'G',
-                        b => *b,
-                    })
-                    .collect::<Vec<_>>(),
-            ))),
-            b => Err(NameError::Type("bytes", vec![b.to_data()])),
-        }
+        Ok(EvalData::Bytes(Cow::Owned(
+            expect_bytes(string)?
+                .iter()
+                .map(|&c| unsafe { *COMP_LUT.as_ptr().add(c as usize) })
+                .rev()
+                .collect::<Vec<_>>(),
+        )))
     }
 
     fn required_names(&self) -> Vec<LabelOrAttr> {
@@ -530,14 +471,13 @@ impl ExprNode for RevNode {
         use_qual: bool,
     ) -> std::result::Result<EvalData<'a>, NameError> {
         let string = self.string.eval(read, use_qual)?;
-
-        use EvalData::*;
-        match string {
-            Bytes(b) => Ok(Bytes(Cow::Owned(
-                b.into_iter().rev().map(|e| *e).collect::<Vec<_>>(),
-            ))),
-            b => Err(NameError::Type("bytes", vec![b.to_data()])),
-        }
+        Ok(EvalData::Bytes(Cow::Owned(
+            expect_bytes(string)?
+                .iter()
+                .cloned()
+                .rev()
+                .collect::<Vec<_>>(),
+        )))
     }
 
     fn required_names(&self) -> Vec<LabelOrAttr> {
@@ -556,11 +496,7 @@ impl ExprNode for LenNode {
         use_qual: bool,
     ) -> std::result::Result<EvalData<'a>, NameError> {
         let string = self.string.eval(read, use_qual)?;
-        use EvalData::*;
-        match string {
-            Bytes(s) => Ok(Int(s.len() as isize)),
-            s => Err(NameError::Type("bytes", vec![s.to_data()])),
-        }
+        Ok(EvalData::Int(expect_bytes(string)?.len() as isize))
     }
 
     fn required_names(&self) -> Vec<LabelOrAttr> {
@@ -667,10 +603,7 @@ impl ExprNode for RepeatNode {
         use EvalData::*;
         match (string, times) {
             (Bytes(s), Int(t)) => Ok(Bytes(Cow::Owned(s.repeat(t as usize)))),
-            (s, t) => Err(NameError::Type(
-                "bytes and int",
-                vec![s.to_data(), t.to_data()],
-            )),
+            (s, t) => Err(NameError::Type("bytes and int", vec![s.into(), t.into()])),
         }
     }
 
@@ -700,10 +633,7 @@ impl ExprNode for ConcatNode {
                 l.to_mut().extend_from_slice(&r);
                 Ok(Bytes(l))
             }
-            (l, r) => Err(NameError::Type(
-                "both bytes",
-                vec![l.to_data(), r.to_data()],
-            )),
+            (l, r) => Err(NameError::Type("both bytes", vec![l.into(), r.into()])),
         }
     }
 
@@ -736,12 +666,7 @@ impl ExprNode for ConcatAllNode {
 
         for node in &self.nodes {
             let b = node.eval(read, use_qual)?;
-
-            if let EvalData::Bytes(b) = b {
-                res.extend_from_slice(&b);
-            } else {
-                return Err(NameError::Type("bytes", vec![b.to_data()]));
-            }
+            res.extend_from_slice(&expect_bytes(b)?);
         }
 
         Ok(EvalData::Bytes(Cow::Owned(res)))
@@ -763,74 +688,35 @@ impl ExprNode for SliceNode {
         read: &'a Read,
         use_qual: bool,
     ) -> std::result::Result<EvalData<'a>, NameError> {
-        let string = self.string.eval(read, use_qual)?;
-
-        use EvalData::*;
-        match string {
-            Bytes(b) => {
-                let mut start_add1 = false;
-                let start = match self.range.start_bound() {
-                    Bound::Included(s) => s.eval(read, use_qual)?,
-                    Bound::Excluded(s) => {
-                        start_add1 = true;
-                        s.eval(read, use_qual)?
-                    }
-                    Bound::Unbounded => Int(0),
-                };
-
-                let mut end_sub1 = false;
-                let end = match self.range.end_bound() {
-                    Bound::Included(e) => e.eval(read, use_qual)?,
-                    Bound::Excluded(e) => {
-                        end_sub1 = true;
-                        e.eval(read, use_qual)?
-                    }
-                    Bound::Unbounded => Int(b.len() as isize),
-                };
-
-                match (start, end) {
-                    (Int(mut s), Int(mut e)) => {
-                        let len = b.len() as isize;
-                        if e < 0 {
-                            e = len + e;
-                        }
-
-                        if end_sub1 {
-                            e -= 1
-                        }
-
-                        if start_add1 {
-                            s += 1
-                        }
-
-                        if s >= 0 && s <= len && e <= len && e >= 0 && s <= e {
-                            Ok(EvalData::Bytes(Cow::Owned(
-                                b.get(s as usize..e as usize).unwrap().into(),
-                            )))
-                        } else {
-                            Err(NameError::Type(
-                                "indices in bound",
-                                vec![Data::Int(s), Data::Int(e)],
-                            ))
-                        }
-                    }
-                    (s, e) => Err(NameError::Type("all int", vec![s.to_data(), e.to_data()])),
-                }
+        let string = expect_bytes(self.string.eval(read, use_qual)?)?;
+        let len = string.len() as isize;
+        let range = map_eval_range(&self.range, read, use_qual, |b| {
+            if b < 0 {
+                (len + b) as usize
+            } else {
+                b as usize
             }
-            b => Err(NameError::Type("interval", vec![b.to_data()])),
+        })?;
+
+        match string {
+            Cow::Owned(mut s) => {
+                let (start, end) = range_inclusive_exclusive(&range, len as usize);
+                s.copy_within(range, 0);
+                s.truncate(end - start);
+                Ok(EvalData::Bytes(Cow::Owned(s)))
+            }
+            Cow::Borrowed(s) => Ok(EvalData::Bytes(Cow::Borrowed(&s[range]))),
         }
     }
 
     fn required_names(&self) -> Vec<LabelOrAttr> {
         let mut res = self.string.required_names();
-        match self.range.start_bound() {
-            Bound::Included(s) | Bound::Excluded(s) => res.append(&mut s.required_names()),
-            _ => (),
-        }
-        match self.range.end_bound() {
-            Bound::Included(e) | Bound::Excluded(e) => res.append(&mut e.required_names()),
-            _ => (),
-        }
+        self.range
+            .start_bound()
+            .map(|s| res.append(&mut s.required_names()));
+        self.range
+            .end_bound()
+            .map(|e| res.append(&mut e.required_names()));
         res
     }
 }
@@ -846,58 +732,19 @@ impl ExprNode for InBoundsNode {
         read: &'a Read,
         use_qual: bool,
     ) -> std::result::Result<EvalData<'a>, NameError> {
-        let num = self.num.eval(read, use_qual)?;
-
-        use EvalData::*;
-        let mut start_add1 = false;
-        let start = match self.range.start_bound() {
-            Bound::Included(s) => s.eval(read, use_qual)?,
-            Bound::Excluded(s) => {
-                start_add1 = true;
-                s.eval(read, use_qual)?
-            }
-            Bound::Unbounded => Int(std::isize::MIN),
-        };
-
-        let mut end_sub1 = false;
-        let end = match self.range.end_bound() {
-            Bound::Included(e) => e.eval(read, use_qual)?,
-            Bound::Excluded(e) => {
-                end_sub1 = true;
-                e.eval(read, use_qual)?
-            }
-            Bound::Unbounded => Int(std::isize::MAX),
-        };
-
-        match (num, start, end) {
-            (Int(n), Int(mut s), Int(mut e)) => {
-                if start_add1 {
-                    s += 1;
-                }
-                if end_sub1 {
-                    e -= 1;
-                }
-                Ok(Bool(s <= n && n <= e))
-            }
-            (n, s, e) => Err(NameError::Type(
-                "all int",
-                vec![n.to_data(), s.to_data(), e.to_data()],
-            )),
-        }
+        let num = expect_int(self.num.eval(read, use_qual)?)?;
+        let range = map_eval_range(&self.range, read, use_qual, |b| b)?;
+        Ok(EvalData::Bool(range.contains(&num)))
     }
 
     fn required_names(&self) -> Vec<LabelOrAttr> {
         let mut res = self.num.required_names();
-        match self.range.start_bound() {
-            Bound::Included(s) => res.append(&mut s.required_names()),
-            Bound::Excluded(s) => res.append(&mut s.required_names()),
-            _ => (),
-        }
-        match self.range.end_bound() {
-            Bound::Included(e) => res.append(&mut e.required_names()),
-            Bound::Excluded(e) => res.append(&mut e.required_names()),
-            _ => (),
-        }
+        self.range
+            .start_bound()
+            .map(|s| res.append(&mut s.required_names()));
+        self.range
+            .end_bound()
+            .map(|e| res.append(&mut e.required_names()));
         res
     }
 }
@@ -1041,80 +888,32 @@ impl ExprNode for Data {
     }
 }
 
-impl ExprNode for &str {
-    fn eval<'a>(
-        &'a self,
-        _read: &'a Read,
-        use_qual: bool,
-    ) -> std::result::Result<EvalData<'a>, NameError> {
-        if use_qual {
-            Ok(EvalData::Bytes(Cow::Owned(vec![UNKNOWN_QUAL; self.len()])))
-        } else {
-            Ok(EvalData::Bytes(Cow::Borrowed(self.as_bytes())))
+macro_rules! impl_expr_node_slice {
+    ($type_name:ty) => {
+        impl ExprNode for $type_name {
+            fn eval<'a>(
+                &'a self,
+                _read: &'a Read,
+                use_qual: bool,
+            ) -> std::result::Result<EvalData<'a>, NameError> {
+                let b: &[u8] = self.as_ref();
+
+                if use_qual {
+                    Ok(EvalData::Bytes(Cow::Owned(vec![UNKNOWN_QUAL; b.len()])))
+                } else {
+                    Ok(EvalData::Bytes(Cow::Borrowed(b)))
+                }
+            }
+
+            fn required_names(&self) -> Vec<LabelOrAttr> {
+                Vec::new()
+            }
         }
-    }
-
-    fn required_names(&self) -> Vec<LabelOrAttr> {
-        Vec::new()
-    }
-}
-
-impl ExprNode for String {
-    fn eval<'a>(
-        &'a self,
-        _read: &'a Read,
-        use_qual: bool,
-    ) -> std::result::Result<EvalData<'a>, NameError> {
-        if use_qual {
-            Ok(EvalData::Bytes(Cow::Owned(vec![UNKNOWN_QUAL; self.len()])))
-        } else {
-            Ok(EvalData::Bytes(Cow::Borrowed(self.as_bytes())))
-        }
-    }
-
-    fn required_names(&self) -> Vec<LabelOrAttr> {
-        Vec::new()
-    }
-}
-
-impl ExprNode for &[u8] {
-    fn eval<'a>(
-        &'a self,
-        _read: &'a Read,
-        use_qual: bool,
-    ) -> std::result::Result<EvalData<'a>, NameError> {
-        if use_qual {
-            Ok(EvalData::Bytes(Cow::Owned(vec![UNKNOWN_QUAL; self.len()])))
-        } else {
-            Ok(EvalData::Bytes(Cow::Borrowed(self)))
-        }
-    }
-
-    fn required_names(&self) -> Vec<LabelOrAttr> {
-        Vec::new()
-    }
-}
-
-impl ExprNode for Vec<u8> {
-    fn eval<'a>(
-        &'a self,
-        _read: &'a Read,
-        use_qual: bool,
-    ) -> std::result::Result<EvalData<'a>, NameError> {
-        if use_qual {
-            Ok(EvalData::Bytes(Cow::Owned(vec![UNKNOWN_QUAL; self.len()])))
-        } else {
-            Ok(EvalData::Bytes(Cow::Borrowed(&self)))
-        }
-    }
-
-    fn required_names(&self) -> Vec<LabelOrAttr> {
-        Vec::new()
-    }
+    };
 }
 
 macro_rules! impl_expr_node {
-    ($type_name:ident, $eval_data_variant:ident) => {
+    ($type_name:ty, $eval_data_variant:ident) => {
         impl ExprNode for $type_name {
             fn eval<'a>(
                 &'a self,
@@ -1131,6 +930,10 @@ macro_rules! impl_expr_node {
     };
 }
 
+impl_expr_node_slice!(&[u8]);
+impl_expr_node_slice!(Vec<u8>);
+impl_expr_node_slice!(&str);
+impl_expr_node_slice!(String);
 impl_expr_node!(usize, Int);
 impl_expr_node!(isize, Int);
 impl_expr_node!(u64, Int);
@@ -1220,13 +1023,63 @@ pub enum EvalData<'a> {
     Bytes(Cow<'a, [u8]>),
 }
 
-impl<'a> EvalData<'a> {
-    pub fn to_data(self) -> Data {
-        match self {
+impl<'a> From<EvalData<'a>> for Data {
+    fn from(v: EvalData<'a>) -> Self {
+        match v {
             EvalData::Bool(b) => Data::Bool(b),
             EvalData::Int(i) => Data::Int(i),
             EvalData::Float(f) => Data::Float(f),
             EvalData::Bytes(b) => Data::Bytes(b.into_owned()),
         }
     }
+}
+
+macro_rules! impl_expect_type {
+    ($fn_name:ident, $type_name:ty, $eval_data_name:pat, $v:ident, $str:expr) => {
+        fn $fn_name<'a>(d: EvalData<'a>) -> std::result::Result<$type_name, NameError> {
+            if let $eval_data_name = d {
+                Ok($v)
+            } else {
+                Err(NameError::Type($str, vec![d.into()]))
+            }
+        }
+    };
+}
+
+impl_expect_type!(expect_bool, bool, EvalData::Bool(v), v, "bool");
+impl_expect_type!(expect_int, isize, EvalData::Int(v), v, "int");
+//impl_expect_type!(expect_float, f64, EvalData::Float(v), v, "float");
+impl_expect_type!(expect_bytes, Cow<'a, [u8]>, EvalData::Bytes(v), v, "bytes");
+
+fn map_eval_range<T>(
+    range: &(Bound<Expr>, Bound<Expr>),
+    read: &Read,
+    use_qual: bool,
+    mut map: impl FnMut(isize) -> T,
+) -> std::result::Result<(Bound<T>, Bound<T>), NameError> {
+    let start = match range.start_bound() {
+        Bound::Included(s) => Bound::Included(map(expect_int(s.eval(read, use_qual)?)?)),
+        Bound::Excluded(s) => Bound::Excluded(map(expect_int(s.eval(read, use_qual)?)?)),
+        Bound::Unbounded => Bound::Unbounded,
+    };
+    let end = match range.end_bound() {
+        Bound::Included(e) => Bound::Included(map(expect_int(e.eval(read, use_qual)?)?)),
+        Bound::Excluded(e) => Bound::Excluded(map(expect_int(e.eval(read, use_qual)?)?)),
+        Bound::Unbounded => Bound::Unbounded,
+    };
+    Ok((start, end))
+}
+
+fn range_inclusive_exclusive(range: &(Bound<usize>, Bound<usize>), len: usize) -> (usize, usize) {
+    let start = match range.start_bound() {
+        Bound::Included(&s) => s,
+        Bound::Excluded(&s) => s + 1,
+        Bound::Unbounded => 0,
+    };
+    let end = match range.end_bound() {
+        Bound::Included(&e) => e + 1,
+        Bound::Excluded(&e) => e,
+        Bound::Unbounded => len,
+    };
+    (start, end)
 }

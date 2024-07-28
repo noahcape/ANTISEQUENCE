@@ -58,6 +58,8 @@ pub enum NameError {
     NotInRead(Name),
     #[error("Expected {0}, but found {1:?}")]
     Type(&'static str, Vec<Data>),
+    #[error("Expression error: {0}")]
+    Other(&'static str),
 }
 
 #[derive(Debug)]

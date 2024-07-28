@@ -79,6 +79,12 @@
 //! to concatenate the substrings corresponding to mappings `a` and `b`, separated by an
 //! underscore.
 //! They also preserve quality scores, making rearranging regions in a read easy.
+//!
+//! ### Note
+//! To apply the same transformations to the quality score, the same expression is evaluated by
+//! simply substituting in quality scores when needed when a `label()` is used.
+//! If this is not desired, then break up the expression by storing intermediate results as
+//! attributes, which will always have the same value (not substituted by quality scores).
 
 pub mod errors;
 pub mod expr;

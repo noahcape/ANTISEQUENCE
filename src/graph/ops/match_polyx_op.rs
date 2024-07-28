@@ -78,7 +78,7 @@ impl GraphNode for MatchPolyXOp {
 const MATCH: i32 = 1i32;
 const MISMATCH: i32 = -2i32;
 
-fn match_polyx(s: &[u8], x: u8, end: End, identity_threshold: f64) -> Option<EndIdx> {
+fn match_polyx(s: &[u8], x: u8, end: End, identity_threshold: f64) -> Option<isize> {
     let mut score = 0i32;
     let mut matches = 0;
     let mut max_score = 0i32;
@@ -103,7 +103,7 @@ fn match_polyx(s: &[u8], x: u8, end: End, identity_threshold: f64) -> Option<End
         let identity = (matches as f64) / (idx as f64);
 
         if identity >= identity_threshold {
-            Some(EndIdx::from_end(end, idx))
+            Some(end.to_isize(idx))
         } else {
             None
         }

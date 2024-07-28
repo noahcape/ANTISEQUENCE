@@ -242,7 +242,7 @@ impl GraphNode for MatchAnyOp {
                         self.label.label,
                         self.new_labels[0].as_ref().map(|l| l.label),
                         self.new_labels[1].as_ref().map(|l| l.label),
-                        LeftEnd(max_cut_pos1),
+                        max_cut_pos1 as isize,
                     )
                     .unwrap_or_else(|e| panic!("Error in {}: {e}", Self::NAME));
                 }
