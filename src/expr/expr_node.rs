@@ -171,15 +171,16 @@ impl Expr {
         self.node.required_names()
     }
 
-    pub fn propagate_const(&mut self) {
+    pub fn propagate_const(&mut self) -> bool {
         if !self.required_names().is_empty() {
-            return;
+            return false;
         }
 
         // no read-specific dependencies
         let temp = Read::new();
-        let data = self.eval(&temp, false).unwrap();
+        let data = self.eval(&temp, false).unwrap_or_else(|e| panic!("{e}"));
         self.node = Box::new(Data::from(data));
+        true
     }
 }
 

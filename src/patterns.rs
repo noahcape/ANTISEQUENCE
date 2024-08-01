@@ -18,10 +18,7 @@ impl Patterns {
             attr_names: Vec::new(),
             patterns: patterns
                 .into_iter()
-                .map(|v| Pattern::Literal {
-                    bytes: v.as_ref().to_owned(),
-                    attrs: Vec::new(),
-                })
+                .map(|v| Pattern::from_literal(v, Vec::new()))
                 .collect(),
         }
     }
@@ -32,10 +29,7 @@ impl Patterns {
             attr_names: Vec::new(),
             patterns: patterns
                 .into_iter()
-                .map(|v| Pattern::Expr {
-                    expr: v,
-                    attrs: Vec::new(),
-                })
+                .map(|v| Pattern::from_expr(v, Vec::new()))
                 .collect(),
         }
     }
@@ -76,6 +70,14 @@ impl Patterns {
 
         true
     }
+
+    pub fn iter_literals(&self) -> impl Iterator<Item = &[u8]> {
+        self.patterns.iter().map(|p| {
+            if let Pattern::Literal { bytes, .. } = p {
+                bytes
+            }
+        })
+    }
 }
 
 pub enum Pattern {
@@ -84,6 +86,20 @@ pub enum Pattern {
 }
 
 impl Pattern {
+    pub fn from_literal(bytes: &[u8], attrs: Vec<Data>) -> Self {
+        Self::Literal { bytes: bytes.to_owned(), attrs }
+    }
+
+    pub fn from_expr(mut expr: Expr, attrs: Vec<Data>) -> Self {
+        if expr.const_prop() {
+            let temp = Read::new();
+            let bytes = expr.eval_bytes(&temp).unwrap_or_else(|e| panic!("{e}")).into_owned();
+            Self::Literal { bytes, attrs }
+        } else {
+            Self::Expr { expr, attrs }
+        }
+    }
+
     pub fn get<'a>(&'a self, read: &'a Read) -> std::result::Result<Cow<'a, [u8]>, NameError> {
         use Pattern::*;
         match self {

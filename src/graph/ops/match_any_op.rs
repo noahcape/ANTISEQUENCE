@@ -14,9 +14,11 @@ pub struct MatchAnyOp {
     required_names: Vec<LabelOrAttr>,
     label: Label,
     new_labels: [Option<Label>; 3],
+    multimatch_attr: Option<Attr>,
     patterns: Patterns,
     match_type: MatchType,
     aligner: ThreadLocal<Option<RefCell<Box<dyn Aligner + Send>>>>,
+    seed_searcher: Option<Box<SeedSearcher>>,
 }
 
 impl MatchAnyOp {
@@ -46,13 +48,60 @@ impl MatchAnyOp {
         }
         transform_expr.check_same_str_type(Self::NAME);
 
+        let seed_searcher = get_searcher(&patterns, &match_type);
+
         Self {
             required_names: vec![transform_expr.before(0).into()],
             label: transform_expr.before(0),
             new_labels,
+            multimatch_attr: None,
             patterns,
             match_type,
             aligner: ThreadLocal::new(),
+            seed_searcher,
+        }
+    }
+
+    pub fn with_multimatch(transform_expr: TransformExpr, patterns: Patterns, match_type: MatchType, multimatch_attr: Attr) -> Self {
+        let mut new_labels = [None, None, None];
+
+        transform_expr.check_size(1, match_type.num_mappings(), Self::NAME);
+        for i in 0..match_type.num_mappings() {
+            new_labels[i] = transform_expr.after_label(i, Self::NAME);
+        }
+        transform_expr.check_same_str_type(Self::NAME);
+
+        let seed_searcher = get_searcher(&patterns, &match_type);
+
+        Self {
+            required_names: vec![transform_expr.before(0).into()],
+            label: transform_expr.before(0),
+            new_labels,
+            multimatch_attr,
+            patterns,
+            match_type,
+            aligner: ThreadLocal::new(),
+            seed_searcher,
+        }
+    }
+
+    fn get_searcher(patterns: &Patterns, match_type: &MatchType) -> Option<Box<SeedSearcher>> {
+        if !patterns.all_literals() {
+            return None;
+        }
+
+        let min_len = patterns.iter_literals().map(|p| p.len()).min::<usize>();
+        let max_len = patterns.iter_literals().map(|p| p.len()).max::<usize>();
+        let k = match_type.get_k(min_len);
+
+        match k {
+            0..=1 => None,
+            2 => Some(Box::new(SmallSearcher::<2>::new(patterns.iter_literals(), k))),
+            3 => Some(Box::new(SmallSearcher::<3>::new(patterns.iter_literals(), k))),
+            4 => Some(Box::new(SmallSearcher::<4>::new(patterns.iter_literals(), k))),
+            5 => Some(Box::new(SmallSearcher::<5>::new(patterns.iter_literals(), k))),
+            6 => Some(Box::new(SmallSearcher::<6>::new(patterns.iter_literals(), k))),
+            _ => Some(Box::new(GeneralSearcher::new(patterns.iter_literals(), k))),
         }
     }
 }
