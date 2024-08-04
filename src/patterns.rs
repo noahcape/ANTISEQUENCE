@@ -91,7 +91,7 @@ impl Pattern {
     }
 
     pub fn from_expr(mut expr: Expr, attrs: Vec<Data>) -> Self {
-        if expr.const_prop() {
+        if expr.optimize() {
             let temp = Read::new();
             let bytes = expr.eval_bytes(&temp).unwrap_or_else(|e| panic!("{e}")).into_owned();
             Self::Literal { bytes, attrs }

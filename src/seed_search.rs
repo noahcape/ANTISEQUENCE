@@ -4,14 +4,6 @@ pub trait SeedSearcher {
     fn search(&self, text: &[u8], candidate_fn: impl FnMut(SeedMatch));
 }
 
-pub struct NoSearcher;
-
-impl SeedSearcher for NoSearcher {
-    fn search(&self, text: &[u8], candidate_fn: impl FnMut(SeedMatch)) {
-
-    }
-}
-
 pub struct SmallSearcher<const K: usize> {
     pattern_luts: [Aligned<64>; K],
     pattern_idxs: Vec<(u32, u32)>,

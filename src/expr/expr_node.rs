@@ -171,7 +171,15 @@ impl Expr {
         self.node.required_names()
     }
 
-    pub fn propagate_const(&mut self) -> bool {
+    /// Apply optimization passes.
+    ///
+    /// Returns whether the result is just a constant.
+    pub fn optimize(&mut self) -> bool {
+        let constant = self.propagate_const();
+        constant
+    }
+
+    fn propagate_const(&mut self) -> bool {
         if !self.required_names().is_empty() {
             return false;
         }
@@ -446,14 +454,16 @@ impl ExprNode for RevCompNode {
         read: &'a Read,
         use_qual: bool,
     ) -> std::result::Result<EvalData<'a>, NameError> {
-        let string = self.string.eval(read, use_qual)?;
-        Ok(EvalData::Bytes(Cow::Owned(
-            expect_bytes(string)?
-                .iter()
-                .map(|&c| unsafe { *COMP_LUT.as_ptr().add(c as usize) })
-                .rev()
-                .collect::<Vec<_>>(),
-        )))
+        let string = expect_bytes(self.string.eval(read, use_qual)?)?;
+        string.to_mut().reverse();
+
+        if !use_qual {
+            string.to_mut()
+                .iter_mut()
+                .for_each(|c| { *c = unsafe { *COMP_LUT.as_ptr().add(*c as usize) }; });
+        }
+
+        Ok(EvalData::Bytes(string))
     }
 
     fn required_names(&self) -> Vec<LabelOrAttr> {
@@ -471,14 +481,9 @@ impl ExprNode for RevNode {
         read: &'a Read,
         use_qual: bool,
     ) -> std::result::Result<EvalData<'a>, NameError> {
-        let string = self.string.eval(read, use_qual)?;
-        Ok(EvalData::Bytes(Cow::Owned(
-            expect_bytes(string)?
-                .iter()
-                .cloned()
-                .rev()
-                .collect::<Vec<_>>(),
-        )))
+        let string = expect_bytes(self.string.eval(read, use_qual)?)?;
+        string.to_mut().reverse();
+        Ok(EvalData::Bytes(string))
     }
 
     fn required_names(&self) -> Vec<LabelOrAttr> {

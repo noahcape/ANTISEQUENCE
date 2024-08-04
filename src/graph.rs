@@ -209,6 +209,34 @@ impl MatchType {
             ExactSearch | HammingSearch(_) | LocalAln { .. } => 3,
         }
     }
+
+    pub fn k(&self, len: usize) -> usize {
+        let k_from_edits = |len, e| (len - e).div_ceil(e + 1);
+        use MatchType::*;
+        match self {
+            Exact => len,
+            ExactPrefix => len,
+            ExactSuffix => len,
+            ExactSearch => len,
+            Hamming(t) => k_from_edits(len, t.get(len)),
+            HammingPrefix(t) => k_from_edits(len, t.get(len)),
+            HammingSuffix(t) => k_from_edits(len, t.get(len)),
+            HammingSearch(t) => k_from_edits(len, t.get(len)),
+            GlobalAln(identity) => k_from_edits(len, len - (((len as f64) * identity).ceil() as usize)),
+            PrefixAln { identity, overlap } => {
+                let len = ((len as f64) * overlap).ceil() as usize;
+                k_from_edits(len, len - (((len as f64) * identity).ceil() as usize))
+            }
+            SuffixAln { identity, overlap } => {
+                let len = ((len as f64) * overlap).ceil() as usize;
+                k_from_edits(len, len - (((len as f64) * identity).ceil() as usize))
+            }
+            LocalAln { identity, overlap } => {
+                let len = ((len as f64) * overlap).ceil() as usize;
+                k_from_edits(len, len - (((len as f64) * identity).ceil() as usize))
+            }
+        }
+    }
 }
 
 /// Either a count or a fraction.

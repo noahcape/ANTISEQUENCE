@@ -16,6 +16,7 @@ pub struct MatchAnyOp {
     new_labels: [Option<Label>; 3],
     multimatch_attr: Option<Attr>,
     patterns: Patterns,
+    max_pattern_len: usize,
     match_type: MatchType,
     aligner: ThreadLocal<Option<RefCell<Box<dyn Aligner + Send>>>>,
     seed_searcher: Option<Box<SeedSearcher>>,
@@ -56,6 +57,7 @@ impl MatchAnyOp {
             new_labels,
             multimatch_attr: None,
             patterns,
+            max_pattern_len: patterns.iter_literals().map(|p| p.len()).max::<usize>(),
             match_type,
             aligner: ThreadLocal::new(),
             seed_searcher,
@@ -79,6 +81,7 @@ impl MatchAnyOp {
             new_labels,
             multimatch_attr,
             patterns,
+            max_pattern_len: patterns.iter_literals().map(|p| p.len()).max::<usize>(),
             match_type,
             aligner: ThreadLocal::new(),
             seed_searcher,
@@ -92,7 +95,7 @@ impl MatchAnyOp {
 
         let min_len = patterns.iter_literals().map(|p| p.len()).min::<usize>();
         let max_len = patterns.iter_literals().map(|p| p.len()).max::<usize>();
-        let k = match_type.get_k(min_len);
+        let k = match_type.k(min_len);
 
         match k {
             0..=1 => None,
@@ -112,7 +115,7 @@ impl GraphNode for MatchAnyOp {
             panic!("Expected some read!")
         };
 
-        let string = read
+        let text = read
             .substring(self.label.str_type, self.label.label)
             .map_err(|e| Error::NameError {
                 source: e,
@@ -120,28 +123,80 @@ impl GraphNode for MatchAnyOp {
                 context: Self::NAME,
             })?;
 
-        let aligner_cell = self.aligner.get_or(|| match self.match_type {
-            MatchType::GlobalAln(_) => Some(RefCell::new(Box::new(
-                GlobalLocalAligner::<false>::new(string.len() * 2),
-            ))),
-            MatchType::LocalAln { .. } => Some(RefCell::new(Box::new(
-                GlobalLocalAligner::<true>::new(string.len() * 2),
-            ))),
-            MatchType::PrefixAln { .. } => Some(RefCell::new(Box::new(
-                PrefixSuffixAligner::<true>::new(string.len() * 2),
-            ))),
-            MatchType::SuffixAln { .. } => Some(RefCell::new(Box::new(
-                PrefixSuffixAligner::<false>::new(string.len() * 2),
-            ))),
-            _ => None,
+        use MatchType::*;
+        let aligner_cell = self.aligner.get_or(|| {
+            let init_len = if self.seed_searcher.is_some() {
+                max_pattern_len * 2
+            } else {
+                text.len() * 2
+            };
+
+            match self.match_type {
+                GlobalAln(_) => Some(RefCell::new(Box::new(
+                    GlobalLocalAligner::<false>::new(len),
+                ))),
+                LocalAln { .. } => Some(RefCell::new(Box::new(
+                    GlobalLocalAligner::<true>::new(len),
+                ))),
+                PrefixAln { .. } => Some(RefCell::new(Box::new(
+                    PrefixSuffixAligner::<true>::new(len),
+                ))),
+                SuffixAln { .. } => Some(RefCell::new(Box::new(
+                    PrefixSuffixAligner::<false>::new(len),
+                ))),
+                _ => None,
+            }
         });
+
+        let seed_hits = if let Some(seed_searcher) = &self.seed_searcher {
+            let mut seed_hits = FxHashSet::default();
+
+            let additional = match self.match_type {
+                LocalAln { identity, .. } | PrefixAln { identity, .. } | SuffixAln { identity, .. } => ((1.0 - identity).max(0.0) * (max_pattern_len as f64)).ceil() as usize,
+                _ => 0,
+            };
+
+            let (text_slice, text_offset, use_i) = match self.match_type {
+                Exact => (&text, 0, false),
+                ExactPrefix => (&text[..text.len().min(max_pattern_len)], 0, false),
+                ExactSuffix => {
+                    let offset = text.len().saturating_sub(max_pattern_len);
+                    (&text[offset..], offset, false)
+                }
+                ExactSearch => (&text, 0, true),
+                Hamming(_) => (&text, 0, false),
+                HammingPrefix(_) => (&text[..text.len().min(max_pattern_len)], 0, false),
+                HammingSuffix(_) => {
+                    let offset = text.len().saturating_sub(max_pattern_len);
+                    (&text[offset..], offset, false)
+                }
+                HammingSearch(_) => (&text, 0, true),
+                GlobalAln(_) => (&text, 0, false),
+                LocalAln { .. } => (&text, 0, true),
+                PrefixAln { .. } => (&text[..text.len().min(max_pattern_len + additional)], 0, false),
+                SuffixAln { .. } => {
+                    let offset = text.len().saturating_sub(max_pattern_len + additional);
+                    (&text[offset..], offset, false)
+                }
+            };
+
+            seed_searcher.search(text_slice, |SeedMatch { pattern_idx, pattern_i, text_i }| {
+                let text_i = if use_i { ((text_offset + text_i) as isize) - (pattern_i as isize) - (additional as isize) } else { 0 };
+                seed_hits.push((pattern_idx, text_i));
+            });
+            seed_hits
+        } else {
+            (0..patterns.len()).map(|i| (i, 0)).collect::<FxHashSet<_>>()
+        };
 
         let mut max_matches = 0;
         let mut max_pattern = None;
         let mut max_cut_pos1 = 0;
         let mut max_cut_pos2 = 0;
+        let mut multimatches = 0;
 
-        for pattern in self.patterns.patterns() {
+        for (pattern_idx, text_i) in seed_hits {
+            let Pattern { bytes, .. } = &self.patterns.patterns()[pattern_idx] else { unreachable!() };
             let pattern_str_cow = pattern.get(&read).map_err(|e| Error::NameError {
                 source: e,
                 read: read.clone(),
@@ -150,100 +205,107 @@ impl GraphNode for MatchAnyOp {
             let pattern_str: &[u8] = &pattern_str_cow;
             let pattern_len = pattern_str.len();
 
-            if max_matches >= pattern_len {
+            if max_matches > pattern_len {
                 continue;
             }
 
-            use MatchType::*;
             let matches = match self.match_type {
                 Exact => {
-                    if string == pattern_str {
+                    if text == pattern_str {
                         Some((pattern_len, pattern_len, 0))
                     } else {
                         None
                     }
                 }
                 ExactPrefix => {
-                    if pattern_len <= string.len() && &string[..pattern_len] == pattern_str {
+                    if pattern_len <= text.len() && &text[..pattern_len] == pattern_str {
                         Some((pattern_len, pattern_len, 0))
                     } else {
                         None
                     }
                 }
                 ExactSuffix => {
-                    if pattern_len <= string.len()
-                        && &string[string.len() - pattern_len..] == pattern_str
+                    if pattern_len <= text.len()
+                        && &text[text.len() - pattern_len..] == pattern_str
                     {
-                        Some((pattern_len, string.len() - pattern_len, 0))
+                        Some((pattern_len, text.len() - pattern_len, 0))
                     } else {
                         None
                     }
                 }
                 ExactSearch => {
-                    memmem::find(string, pattern_str).map(|i| (pattern_len, i, i + pattern_len))
+                    let text_start = text_i.max(0) as usize;
+                    let text_end = if self.seed_searcher.is_some() { text.len().min((text_i + (pattern_len as isize)) as usize) } else { text.len() };
+                    let text_around = &text[text_start..text_end];
+                    memmem::find(text_around, pattern_str).map(|i| (pattern_len, i, i + pattern_len))
                 }
                 Hamming(t) => {
                     let t = t.get(pattern_len);
-                    hamming(string, pattern_str, t).map(|m| (m, pattern_len, 0))
+                    hamming(text, pattern_str, t).map(|m| (m, pattern_len, 0))
                 }
                 HammingPrefix(t) => {
-                    if pattern_len <= string.len() {
+                    if pattern_len <= text.len() {
                         let t = t.get(pattern_len);
-                        hamming(&string[..pattern_len], pattern_str, t).map(|m| (m, pattern_len, 0))
+                        hamming(&text[..pattern_len], pattern_str, t).map(|m| (m, pattern_len, 0))
                     } else {
                         None
                     }
                 }
                 HammingSuffix(t) => {
-                    if pattern_len <= string.len() {
+                    if pattern_len <= text.len() {
                         let t = t.get(pattern_len);
-                        hamming(&string[string.len() - pattern_len..], pattern_str, t)
-                            .map(|m| (m, string.len() - pattern_len, 0))
+                        hamming(&text[text.len() - pattern_len..], pattern_str, t)
+                            .map(|m| (m, text.len() - pattern_len, 0))
                     } else {
                         None
                     }
                 }
                 HammingSearch(t) => {
+                    let text_start = text_i.max(0) as usize;
+                    let text_end = if self.seed_searcher.is_some() { text.len().min((text_i + (pattern_len as isize)) as usize) } else { text.len() };
+                    let text_around = &text[text_start..text_end];
                     let t = t.get(pattern_len);
-                    hamming_search(string, pattern_str, t)
+                    hamming_search(text, pattern_str, t)
                 }
                 GlobalAln(identity) => aligner_cell
                     .as_ref()
                     .unwrap()
                     .borrow_mut()
-                    .align(string, pattern_str, identity, identity)
+                    .align(text, pattern_str, identity, identity)
                     .map(|(m, _, end_idx)| (m, end_idx, 0)),
-                LocalAln { identity, overlap } => aligner_cell
-                    .as_ref()
-                    .unwrap()
-                    .borrow_mut()
-                    .align(string, pattern_str, identity, overlap),
-                PrefixAln { identity, overlap } => {
-                    let additional =
-                        ((1.0 - identity).max(0.0) * (pattern_len as f64)).ceil() as usize;
-                    let len = string.len().min(pattern_len + additional);
+                LocalAln { identity, overlap } => {
+                    let additional = ((1.0 - identity).max(0.0) * (max_pattern_len as f64)).ceil() as usize;
+                    let text_start = text_i.max(0) as usize;
+                    let text_end = if self.seed_searcher.is_some() { text.len().min((text_i + (pattern_len as isize) + additional * 2) as usize) } else { text.len() };
+                    let text_around = &text[text_start..text_end];
                     aligner_cell
                         .as_ref()
                         .unwrap()
                         .borrow_mut()
-                        .align(&string[..len], pattern_str, identity, overlap)
+                        .align(text_around, pattern_str, identity, overlap)
+                }
+                PrefixAln { identity, overlap } => {
+                    let additional = ((1.0 - identity).max(0.0) * (pattern_len as f64)).ceil() as usize;
+                    aligner_cell
+                        .as_ref()
+                        .unwrap()
+                        .borrow_mut()
+                        .align(&text[..text.len().min(pattern_len + additional)], pattern_str, identity, overlap)
                         .map(|(m, _, end_idx)| (m, end_idx, 0))
                 }
                 SuffixAln { identity, overlap } => {
-                    let additional =
-                        ((1.0 - identity).max(0.0) * (pattern_len as f64)).ceil() as usize;
-                    let len = string.len().min(pattern_len + additional);
+                    let additional = ((1.0 - identity).max(0.0) * (pattern_len as f64)).ceil() as usize;
                     aligner_cell
                         .as_ref()
                         .unwrap()
                         .borrow_mut()
                         .align(
-                            &string[string.len() - len..],
+                            &text[text.len().saturating_sub(pattern_len + additional)..],
                             pattern_str,
                             identity,
                             overlap,
                         )
-                        .map(|(m, start_idx, _)| (m, string.len() - len + start_idx, 0))
+                        .map(|(m, start_idx, _)| (m, text.len() - len + start_idx, 0))
                 }
             };
 
@@ -253,10 +315,9 @@ impl GraphNode for MatchAnyOp {
                     max_pattern = Some((pattern_str_cow, pattern.attrs()));
                     max_cut_pos1 = cut_pos1;
                     max_cut_pos2 = cut_pos2;
-
-                    if max_matches >= pattern_len {
-                        break;
-                    }
+                    multimatches = 1;
+                } else if matches == max_matches {
+                    multimatches += 1;
                 }
             }
         }
@@ -269,6 +330,10 @@ impl GraphNode for MatchAnyOp {
 
             if let Some(pattern_name) = self.patterns.pattern_name() {
                 *mapping.data_mut(pattern_name) = Data::Bytes(pattern_str);
+            }
+
+            if let Some(multimatch_attr) = self.multimatch_attr {
+                *mapping.data_mut(multimatch_attr) = Data::Int(multimatches);
             }
 
             for (&attr, data) in self.patterns.attr_names().iter().zip(pattern_attrs) {
