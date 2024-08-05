@@ -10,7 +10,7 @@ pub struct SmallSearcher<const K: usize> {
 }
 
 impl SmallSearcher<const K: usize> {
-    pub fn new(patterns: impl Iterator<Item = &[u8]>) -> Result<Self, ()> {
+    pub fn new(patterns: impl Iterator<Item = (usize, &[u8])>) -> Result<Self, ()> {
         cfg_if! {
             if #[cfg(not(feature = "avx2"))] {
                 return Err(());
@@ -21,7 +21,7 @@ impl SmallSearcher<const K: usize> {
         let mut pattern_idxs = Vec::new();
         let mut idx = 0;
 
-        for (pattern_idx, pattern) in patterns.iter().enumerate() {
+        for (&pattern_idx, pattern) in patterns.iter() {
             for (pattern_i, kmer) in pattern.windows(K).enumerate() {
                 if idx >= 8 {
                     return Err(());
@@ -104,10 +104,10 @@ pub struct GeneralSearcher {
 impl GeneralSearcher {
     const B: usize = 8;
 
-    pub fn new(patterns: impl Iterator<Item = &[u8]>, k: usize) -> Self {
+    pub fn new(patterns: impl Iterator<Item = (usize, &[u8])>, k: usize) -> Self {
         let mut hashes = Vec::new();
 
-        for (pattern_idx, p) in patterns.iter().enumerate() {
+        for (&pattern_idx, p) in patterns.iter() {
             Self::get_hashes(p, k, |curr_hashes, len, pattern_i| {
                 hashes.extend(curr_hashes[..len].into_iter().enumerate().map(|(i, h)| (h, pattern_idx, pattern_i + i)));
             });
