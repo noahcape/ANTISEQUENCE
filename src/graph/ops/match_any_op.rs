@@ -445,9 +445,16 @@ fn hamming(a: &[u8], b: &[u8], threshold: usize) -> Option<usize> {
             i += 8;
         }
 
-        while i < n {
-            res += (*a_ptr.add(i) != *b_ptr.add(i)) as usize;
-            i += 1;
+        if i < n {
+            let a_word = read_rest_u64(a_ptr.add(i), n - i);
+            let b_word = read_rest_u64(b_ptr.add(i), n - i);
+
+            let xor = a_word ^ b_word;
+            let or1 = xor | (xor >> 1);
+            let or2 = or1 | (or1 >> 2);
+            let or3 = or2 | (or2 >> 4);
+            let mask = or3 & 0x0101010101010101u64;
+            res += mask.count_ones() as usize;
         }
     }
 
@@ -457,6 +464,26 @@ fn hamming(a: &[u8], b: &[u8], threshold: usize) -> Option<usize> {
         Some(matches)
     } else {
         None
+    }
+}
+
+fn read_rest_u64(ptr: *const u8, len: usize) -> u64 {
+    let addr = ptr as usize;
+    let start_page = addr >> 12;
+    let end_page = (addr + 7) >> 12;
+
+    if start_page == end_page {
+        std::ptr::read_unaligned(ptr as *const u64) & ((1u64 << (len * 8)) - 1)
+    } else {
+        let mut res = 0u64;
+        let mut i = 0;
+
+        while i < len {
+            res |= *ptr.add(i) << (i * 8);
+            i += 1;
+        }
+
+        res
     }
 }
 

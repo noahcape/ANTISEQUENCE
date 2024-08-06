@@ -49,14 +49,24 @@ impl<const K: usize> SeedSearcher for SmallSearcher<{ K }> {
         cfg_if! {
             if #[cfg(feature = "avx2")] {
                 const L: usize = 32;
-                let lo_4_mask = _mm256_set1_epi8(0b0000_1111i8);
-                let mut i = 0;
 
-                while i + L + K <= text.len() {
+                #[inline(always)]
+                fn inner<const REST: bool>(text: &[u8], candidate_fn: &mut impl FnMut(SeedMatch), i: usize, len: usize) {
+                    let lo_4_mask = _mm256_set1_epi8(0b0000_1111i8);
                     let mut set = _mm256_setzero_si256();
 
+                    let load_mask = if REST {
+                        load_mask_avx2(len)
+                    } else {
+                        _mm256_set1_epi8(-1i8)
+                    };
+
                     for j in 0..K {
-                        let mut chars = _mm256_loadu_si256(text.as_ptr().add(i + j) as _);
+                        let mut chars = if REST {
+                            load_rest_avx2(text.as_ptr().add(i + j), len)
+                        } else {
+                            _mm256_loadu_si256(text.as_ptr().add(i + j) as _)
+                        };
 
                         if j % 2 != 0 {
                             chars = _mm256_srli_epi16(chars, 1);
@@ -67,12 +77,13 @@ impl<const K: usize> SeedSearcher for SmallSearcher<{ K }> {
                         set = _mm256_and_si256(set, curr_set);
                     }
 
+                    set = _mm256_and_si256(set, load_mask);
                     let nonzero = _mm256_cmpgt_epi8(set, _mm256_setzero_si256());
                     let mut nonzero_mask = _mm256_movemask_epi8(nonzero) as u32;
 
                     if nonzero_mask > 0 {
                         let mut a = Aligned::<{ L }>::default();
-                        _mm256_store_si256(a.0.as_ptr() as _, set);
+                        _mm256_store_si256(a.0.as_mut_ptr() as _, set);
 
                         while nonzero_mask > 0 {
                             let idx = nonzero_mask.trailing_zeros() as usize;
@@ -84,11 +95,18 @@ impl<const K: usize> SeedSearcher for SmallSearcher<{ K }> {
                             nonzero_mask &= nonzero_mask - 1;
                         }
                     }
+                }
 
+                let mut i = 0;
+
+                while i + (K - 1) + L <= text.len() {
+                    inner::<false>(text, &mut candidate_fn, i, L);
                     i += L;
                 }
 
-                // TODO: epilogue
+                if i + (K - 1) < text.len() {
+                    inner::<true>(text, &mut candidate_fn, i, text.len() - i - (K - 1));
+                }
             } else {
                 unreachable!()
             }
@@ -195,7 +213,7 @@ impl HashToPatternIdx {
             }
         });
 
-        let pattern_idxs = pattern_idxs.into_iter().map(|(_, pattern_idx, pattern_i)| (pattern_idxs, pattern_i)).collect();
+        let pattern_idxs = pattern_idxs.into_iter().map(|(_, pattern_idx, pattern_i)| (pattern_idx, pattern_i)).collect();
 
         Self {
             hash_to_idxs,
@@ -245,6 +263,40 @@ pub struct SeedMatch {
 #[align(64)]
 struct Aligned<const L: usize>([u8; L]);
 
+cfg_if! {
+    if #[cfg(feature = "avx2")] {
+        fn load_mask_avx2(len: usize) -> __m256i {
+            static MASKS: [u8; 64] = {
+                let mut m = [0u8; 64];
+                let mut i = 0;
+
+                while i < 32 {
+                    m[i] = 0xFFu8;
+                    i += 1;
+                }
+
+                m
+            };
+            _mm256_loadu_si256(MASKS.as_ptr().add(32 - len) as _)
+        }
+
+        fn read_rest_avx2(ptr: *const u8, len: usize) -> __m256i {
+            let addr = ptr as usize;
+            let start_page = addr >> 12;
+            let end_page = (addr + 31) >> 12;
+
+            if start_page == end_page {
+                _mm256_loadu_si256(ptr as _)
+            } else {
+                let mut a = Aligned::<32>([0u8; 32]);
+                std::ptr::copy_nonoverlapping(a.0.as_mut_ptr(), ptr, len);
+                _mm256_load_si256(a.0.as_ptr() as _)
+            }
+        }
+    }
+}
+
+#[inline(always)]
 fn wyhash_byte(b: u8) -> u32 {
     let a = 0xa076_1d64_78bd_642fu64;
     let b = (b as u64) ^ 0xe703_7ed1_a0b4_28dbu64;
