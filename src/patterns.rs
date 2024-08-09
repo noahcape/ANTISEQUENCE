@@ -62,17 +62,21 @@ impl Patterns {
     }
 
     pub fn iter_literals(&self) -> impl Iterator<Item = (usize, &[u8])> {
-        self.patterns.iter().enumerate().map(|(i, p)| {
+        self.patterns.iter().enumerate().filter_map(|(i, p)| {
             if let Pattern::Literal { bytes, .. } = p {
-                (i, bytes)
+                Some((i, bytes))
+            } else {
+                None
             }
         })
     }
 
     pub fn iter_exprs(&self) -> impl Iterator<Item = (usize, &Expr)> {
-        self.patterns.iter().enumerate().map(|(i, p)| {
+        self.patterns.iter().enumerate().filter_map(|(i, p)| {
             if let Pattern::Expr { expr, .. } = p {
-                (i, expr)
+                Some((i, expr))
+            } else {
+                None
             }
         })
     }

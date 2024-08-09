@@ -47,7 +47,7 @@ impl SmallSearcher<const K: usize> {
 impl<const K: usize> SeedSearcher for SmallSearcher<{ K }> {
     fn search(&self, text: &[u8], mut candidate_fn: impl FnMut(SeedMatch)) {
         cfg_if! {
-            if #[cfg(feature = "avx2")] {
+            if #[cfg(target_feature = "avx2")] {
                 const L: usize = 32;
 
                 #[inline(always)]
@@ -62,6 +62,7 @@ impl<const K: usize> SeedSearcher for SmallSearcher<{ K }> {
                     };
 
                     for j in 0..K {
+                        // TODO: version with permutevar
                         let mut chars = if REST {
                             load_rest_avx2(text.as_ptr().add(i + j), len)
                         } else {
@@ -138,7 +139,7 @@ impl GeneralSearcher {
     }
 
     #[inline(always)]
-    unsafe fn get_hashes(s: &[u8], k: usize, f: impl FnMut([u32; Self::B], usize, usize)) {
+    unsafe fn get_hashes(s: &[u8], k: usize, f: impl FnMut([u64; Self::B], usize, usize)) {
         if s.len() < k {
             return;
         }
@@ -153,7 +154,7 @@ impl GeneralSearcher {
         }
 
         while i + Self::B <= s.len() {
-            let mut hashes = [0u32; Self::B];
+            let mut hashes = [0u64; Self::B];
             for j in 0..Self::B {
                 hashes[j] = hash;
                 hash = hash.rotate_left(1) ^ wyhash_byte(*ptr.add(i + j)) ^ wyhash_byte(*ptr.add(i + j - k)).rotate_left(k);
@@ -167,7 +168,7 @@ impl GeneralSearcher {
         let len = s.len() - i;
 
         if len > 0 {
-            let mut hashes = [0u32; Self::B];
+            let mut hashes = [0u64; Self::B];
             for j in 0..len {
                 hashes[j] = hash;
                 hash = hash.rotate_left(1) ^ wyhash_byte(*ptr.add(i + j)) ^ wyhash_byte(*ptr.add(i + j - k)).rotate_left(k);
@@ -187,68 +188,120 @@ impl SeedSearcher for GeneralSearcher {
 }
 
 struct HashToPatternIdx {
-    hash_to_idxs: Vec<u32>,
-    pattern_idxs: Vec<(u32, u32)>,
+    filter: Filter,
+    map: FxHashMap<u64, (u32, u32)>, // hash to intervals in pattern_idxs
+    pattern_idxs: Vec<(u32, u32)>, // (pattern_idx, pattern_i)
 }
 
 impl HashToPatternIdx {
-    pub fn new(mut pattern_idxs: Vec<(u32, usize, usize)>) -> Self {
-        let num_hashes = (pattern_idxs.len() * 8).next_power_of_two();
-        pattern_idxs.sort_unstable();
-        let mut hash_to_idxs = vec![0u32; num_hashes];
+    pub fn new(hash_pattern_idxs: Vec<(u64, usize, usize)>) -> Self {
+        assert!(hash_pattern_idxs.len() <= std::u32::MAX as usize);
+        hash_pattern_idxs.sort_unstable();
+        let filter = Filter::new(hash_pattern_idxs.iter().map(|(&h, _, _)| h));
+        let mut map = FxHashMap::default();
 
-        for (hash, _, _) in &pattern_idxs {
-            hash_to_idxs[(hash as usize) & (hash_to_idxs.len() - 1)] += 1;
+        for (i, (&hash, _, _)) in hash_pattern_idxs.iter().enumerate() {
+            map.entry(hash).or_insert((i, i)).1 += 1;
         }
 
-        let mut sum = 0;
-        hash_to_idxs.iter_mut().for_each(|i| {
-            let temp = *i;
-
-            if temp == 0 {
-                *i = std::u32::MAX;
-            } else {
-                *i = sum;
-                sum += temp;
-            }
-        });
-
-        let pattern_idxs = pattern_idxs.into_iter().map(|(_, pattern_idx, pattern_i)| (pattern_idx, pattern_i)).collect();
-
         Self {
-            hash_to_idxs,
-            pattern_idxs,
+            filter,
+            map,
+            pattern_idxs: hash_pattern_idxs.into_iter().map(|(_, idx, i)| (idx, i)).collect(),
         }
     }
 
     #[inline(always)]
-    pub unsafe fn batch_lookup<const N: usize>(mut hashes: [usize; N], len: usize, text_i: usize, candidate_fn: &mut impl FnMut(SeedMatch)) {
-        let mut starts = [0u32; N];
-        let mut found = 0;
+    pub unsafe fn batch_lookup<const N: usize>(hashes: [u64; N], len: usize, text_i: usize, candidate_fn: &mut impl FnMut(SeedMatch)) {
+        let mut contains = 0u64;
 
         for i in 0..N {
-            hashes[i] = if i < len { hashes[i] & (self.hash_to_idxs.len() - 1) } else { 0 };
-            starts[i] = *self.hash_to_idxs.as_ptr().add(hashes[i]);
-            found += if starts[i] == std::u32::MAX { 0 } else { 1 };
-        }
-
-        if found == 0 {
-            return;
-        }
-
-        for (i, (start, hash)) in starts[..len].into_iter().zip(hashes[..len].into_iter()).enumerate() {
-            if start == std::u32::MAX {
-                continue;
+            if self.filter.contains(hashes[i]) {
+                contains |= 1 << i;
             }
+        }
 
-            let start = start as usize;
-            let end = self.hash_to_idxs.get(hash + 1).map(|i| i as usize).unwrap_or(self.pattern_idxs.len());
+        contains &= (1 << len) - 1;
 
-            for j in start..end {
-                let (pattern_idx, pattern_i) = *self.pattern_idxs.as_ptr().add(j);
+        while contains > 0 {
+            let i = contains.trailing_zeros() as usize;
+            let hash = hashes[i];
+            let Some((start, end)) = self.map.get(hash) else { continue };
+
+            for &(pattern_idx, pattern_i) in &pattern_idxs[start as usize..end as usize] {
                 candidate_fn(SeedMatch { text_i: text_i + i, pattern_idx: pattern_idx as usize, pattern_i: pattern_i as usize });
             }
+
+            contains &= contains - 1;
         }
+    }
+}
+
+struct Filter {
+    hashes: Vec<u16>,
+    len: usize,
+}
+
+impl Filter {
+    pub fn new(full_hashes: impl Iterator<Item = u64>) -> Self {
+        let mut full_hashes = full_hashes.collect::<Vec<_>>();
+        full_hashes.sort_unstable();
+        full_hashes.unique();
+        let len = (full_hashes.len() * 3 / 2).next_power_of_two();
+        let mut hashes = vec![0u16; len + 32];
+
+        for h in full_hashes {
+            Self::insert(&mut hashes, h);
+        }
+
+        Self { hashes, len }
+    }
+
+    fn insert(hashes: &mut [u16], len: usize, h: u64) {
+        let mut idx = (h as usize) & (len - 1);
+
+        loop {
+            if idx >= hashes.len() {
+                return;
+            }
+            if hashes[idx] == 0 {
+                break;
+            }
+            idx += 1;
+        }
+
+        hashes[idx] = (((h >> 49) << 1) | 1) as u16;
+    }
+
+    #[inline(always)]
+    pub unsafe fn contains(&self, hash: u64) -> bool {
+        let idx = (hash as usize) & (self.len - 1);
+        let hash_hi = (((hash >> 49) << 1) | 1) as u16;
+        let match_mask = 0u64;
+        let zero_mask = 0u64;
+
+        cfg_if! {
+            if #[cfg(target_feature = "avx2")] {
+                let hashes = _mm256_loadu_si256(self.hashes.as_ptr().add(idx) as _);
+                let match_hash = _mm256_cmpeq_epi16(_mm256_set1_epi16(hash_hi as _), hashes);
+                let match_zero = _mm256_cmpeq_epi16(hashes, _mm256_setzero_si256());
+                match_mask = _mm256_movemask_epi8(match_hash) as u32 as u64;
+                zero_mask = _mm256_movemask_epi8(match_zero) as u32 as u64;
+            } else {
+                for i in 0..16 {
+                    if hash_hi == *self.hashes.as_ptr().add(idx + i) {
+                        match_mask |= 1 << i;
+                    }
+                    if *self.hashes.as_ptr().add(idx + i) == 0 {
+                        zero_mask |= 1 << i;
+                    }
+                }
+            }
+        }
+
+        let first_matches_mask = (zero_mask & zero_mask.wrapping_neg()).wrapping_sub(1);
+        match_mask &= first_matches_mask;
+        zero_mask == 0 || match_mask > 0
     }
 }
 
@@ -264,7 +317,7 @@ pub struct SeedMatch {
 struct Aligned<const L: usize>([u8; L]);
 
 cfg_if! {
-    if #[cfg(feature = "avx2")] {
+    if #[cfg(target_feature = "avx2")] {
         fn load_mask_avx2(len: usize) -> __m256i {
             static MASKS: [u8; 64] = {
                 let mut m = [0u8; 64];
@@ -297,9 +350,9 @@ cfg_if! {
 }
 
 #[inline(always)]
-fn wyhash_byte(b: u8) -> u32 {
+fn wyhash_byte(b: u8) -> u64 {
     let a = 0xa076_1d64_78bd_642fu64;
     let b = (b as u64) ^ 0xe703_7ed1_a0b4_28dbu64;
-    let c = a.wrapping_mul(b);
-    (c ^ (c >> 32)) as u32
+    let c = (a as u128).wrapping_mul(b as u128);
+    (c ^ (c >> 64)) as u64
 }

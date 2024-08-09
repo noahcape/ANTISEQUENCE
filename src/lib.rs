@@ -94,6 +94,7 @@ mod read;
 
 mod inline_string;
 mod parse_utils;
+mod seed_search;
 
 // commonly used functions and types
 

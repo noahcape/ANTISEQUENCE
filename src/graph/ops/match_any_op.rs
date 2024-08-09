@@ -1,5 +1,7 @@
 use block_aligner::{cigar::*, scan_block::*, scores::*};
 
+use rustc_hash::FxHashSet;
+
 use memchr::memmem;
 
 use thread_local::*;
@@ -9,7 +11,9 @@ use std::marker::Send;
 
 use crate::graph::*;
 use crate::Patterns;
+use crate::seed_search::*;
 
+// TODO: enum SeedSearcher for speed
 pub struct MatchAnyOp {
     required_names: Vec<LabelOrAttr>,
     label: Label,
@@ -19,7 +23,7 @@ pub struct MatchAnyOp {
     max_literal_len: usize,
     match_type: MatchType,
     aligner: ThreadLocal<Option<RefCell<Box<dyn Aligner + Send>>>>,
-    seed_searcher: Option<Box<SeedSearcher>>,
+    seed_searcher: Option<Box<dyn SeedSearcher>>,
 }
 
 impl MatchAnyOp {
@@ -49,7 +53,7 @@ impl MatchAnyOp {
         }
         transform_expr.check_same_str_type(Self::NAME);
 
-        let seed_searcher = get_searcher(&patterns, &match_type);
+        let seed_searcher = Self::get_searcher(&patterns, &match_type);
 
         Self {
             required_names: vec![transform_expr.before(0).into()],
@@ -73,7 +77,7 @@ impl MatchAnyOp {
         }
         transform_expr.check_same_str_type(Self::NAME);
 
-        let seed_searcher = get_searcher(&patterns, &match_type);
+        let seed_searcher = Self::get_searcher(&patterns, &match_type);
 
         Self {
             required_names: vec![transform_expr.before(0).into()],
@@ -88,7 +92,7 @@ impl MatchAnyOp {
         }
     }
 
-    fn get_searcher(patterns: &Patterns, match_type: &MatchType) -> Option<Box<SeedSearcher>> {
+    fn get_searcher(patterns: &Patterns, match_type: &MatchType) -> Option<Box<dyn SeedSearcher>> {
         let min_len = patterns.iter_literals().map(|(_, p)| p.len()).min::<usize>().unwrap_or(0);
         let max_len = patterns.iter_literals().map(|(_, p)| p.len()).max::<usize>().unwrap_or(0);
         let k = match_type.k(min_len);
@@ -159,24 +163,24 @@ impl GraphNode for MatchAnyOp {
         if let Some(seed_searcher) = &self.seed_searcher {
             let (text_slice, text_offset, use_i) = match self.match_type {
                 Exact => (&text, 0, false),
-                ExactPrefix => (&text[..text.len().min(max_literal_len)], 0, false),
+                ExactPrefix => (&text[..text.len().min(self.max_literal_len)], 0, false),
                 ExactSuffix => {
-                    let offset = text.len().saturating_sub(max_literal_len);
+                    let offset = text.len().saturating_sub(self.max_literal_len);
                     (&text[offset..], offset, false)
                 }
                 ExactSearch => (&text, 0, true),
                 Hamming(_) => (&text, 0, false),
-                HammingPrefix(_) => (&text[..text.len().min(max_literal_len)], 0, false),
+                HammingPrefix(_) => (&text[..text.len().min(self.max_literal_len)], 0, false),
                 HammingSuffix(_) => {
-                    let offset = text.len().saturating_sub(max_literal_len);
+                    let offset = text.len().saturating_sub(self.max_literal_len);
                     (&text[offset..], offset, false)
                 }
                 HammingSearch(_) => (&text, 0, true),
                 GlobalAln(_) => (&text, 0, false),
                 LocalAln { .. } => (&text, 0, true),
-                PrefixAln { identity, .. } => (&text[..text.len().min(max_literal_len + additional(identity, max_literal_len))], 0, false),
+                PrefixAln { identity, .. } => (&text[..text.len().min(self.max_literal_len + additional(identity, self.max_literal_len))], 0, false),
                 SuffixAln { identity, .. } => {
-                    let offset = text.len().saturating_sub(max_literal_len + additional(identity, max_literal_len));
+                    let offset = text.len().saturating_sub(self.max_literal_len + additional(identity, self.max_literal_len));
                     (&text[offset..], offset, false)
                 }
             };
