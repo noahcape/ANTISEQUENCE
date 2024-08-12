@@ -211,7 +211,7 @@ impl MatchType {
     }
 
     pub fn k(&self, len: usize) -> usize {
-        let k_from_edits = |len, e| (len - e).div_ceil(e + 1);
+        let k_from_edits = |len: usize, e: usize| (len - e).div_ceil(e + 1);
         use MatchType::*;
         match self {
             Exact => len,
@@ -222,7 +222,9 @@ impl MatchType {
             HammingPrefix(t) => k_from_edits(len, t.get(len)),
             HammingSuffix(t) => k_from_edits(len, t.get(len)),
             HammingSearch(t) => k_from_edits(len, t.get(len)),
-            GlobalAln(identity) => k_from_edits(len, len - (((len as f64) * identity).ceil() as usize)),
+            GlobalAln(identity) => {
+                k_from_edits(len, len - (((len as f64) * identity).ceil() as usize))
+            }
             PrefixAln { identity, overlap } => {
                 let len = ((len as f64) * overlap).ceil() as usize;
                 k_from_edits(len, len - (((len as f64) * identity).ceil() as usize))

@@ -454,13 +454,13 @@ impl ExprNode for RevCompNode {
         read: &'a Read,
         use_qual: bool,
     ) -> std::result::Result<EvalData<'a>, NameError> {
-        let string = expect_bytes(self.string.eval(read, use_qual)?)?;
+        let mut string = expect_bytes(self.string.eval(read, use_qual)?)?;
         string.to_mut().reverse();
 
         if !use_qual {
-            string.to_mut()
-                .iter_mut()
-                .for_each(|c| { *c = unsafe { *COMP_LUT.as_ptr().add(*c as usize) }; });
+            string.to_mut().iter_mut().for_each(|c| {
+                *c = unsafe { *COMP_LUT.as_ptr().add(*c as usize) };
+            });
         }
 
         Ok(EvalData::Bytes(string))
@@ -481,7 +481,7 @@ impl ExprNode for RevNode {
         read: &'a Read,
         use_qual: bool,
     ) -> std::result::Result<EvalData<'a>, NameError> {
-        let string = expect_bytes(self.string.eval(read, use_qual)?)?;
+        let mut string = expect_bytes(self.string.eval(read, use_qual)?)?;
         string.to_mut().reverse();
         Ok(EvalData::Bytes(string))
     }
