@@ -19,6 +19,7 @@ pub struct MatchAnyOp {
     new_labels: [Option<Label>; 3],
     patterns: Patterns,
     max_literal_len: usize,
+    all_literals: bool,
     match_type: MatchType,
     aligner: ThreadLocal<Option<RefCell<Box<dyn Aligner + Send>>>>,
     seed_searcher: Option<SeedSearchers>,
@@ -57,6 +58,7 @@ impl MatchAnyOp {
             .map(|(_, p)| p.len())
             .max()
             .unwrap_or(0);
+        let all_literals = patterns.iter_exprs().count() == 0;
 
         Self {
             required_names: vec![transform_expr.before(0).into()],
@@ -64,6 +66,7 @@ impl MatchAnyOp {
             new_labels,
             patterns,
             max_literal_len,
+            all_literals,
             match_type,
             aligner: ThreadLocal::new(),
             seed_searcher,
@@ -194,7 +197,9 @@ impl GraphNode for MatchAnyOp {
             seed_hits.extend(self.patterns.iter_literals().map(|(i, _)| (i, None)));
         }
 
-        seed_hits.extend(self.patterns.iter_exprs().map(|(i, _)| (i, None)));
+        if !self.all_literals {
+            seed_hits.extend(self.patterns.iter_exprs().map(|(i, _)| (i, None)));
+        }
 
         let mut max_matches = 0;
         let mut max_pattern = None;
