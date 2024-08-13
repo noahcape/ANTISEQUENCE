@@ -87,7 +87,7 @@ impl<const K: usize> SeedSearcher for SmallSearcher<{ K }> {
                 #[inline(always)]
                 unsafe fn inner<const K: usize, const REST: bool>(pattern_luts: &[Aligned<64>; K], pattern_idxs: &[(u32, u32)], text: &[u8], candidate_fn: &mut impl FnMut(SeedMatch), i: usize, len: usize) {
                     let lo_4_mask = _mm256_set1_epi8(0b0000_1111i8);
-                    let mut set = _mm256_setzero_si256();
+                    let mut set = _mm256_set1_epi8(-1i8);
 
                     let load_mask = if REST {
                         load_mask_avx2(len)
@@ -96,7 +96,6 @@ impl<const K: usize> SeedSearcher for SmallSearcher<{ K }> {
                     };
 
                     for j in 0..K {
-                        // TODO: version with permutevar
                         let mut chars = if REST {
                             read_rest_avx2(text.as_ptr().add(i + j), len)
                         } else {
@@ -210,7 +209,7 @@ impl GeneralSearcher {
             i += Self::B;
         }
 
-        let len = s.len() - i;
+        let len = s.len() + 1 - i;
 
         if len > 0 {
             let mut hashes = [0u64; Self::B];
