@@ -20,9 +20,11 @@ impl CutOp {
         let cut_idx = cut_idx.into();
         transform_expr.check_size(1, 2, Self::NAME);
         transform_expr.check_same_str_type(Self::NAME);
+        let mut required_names = cut_idx.required_names();
+        required_names.push(transform_expr.before(0).into());
 
         Self {
-            required_names: vec![transform_expr.before(0).into()],
+            required_names,
             cut_label: transform_expr.before(0),
             new_label1: transform_expr.after_label(0, Self::NAME),
             new_label2: transform_expr.after_label(1, Self::NAME),

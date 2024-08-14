@@ -24,14 +24,15 @@ impl SetOp {
     pub fn new(label_or_attr: impl Into<LabelOrAttr>, expr: impl Into<Expr>) -> Self {
         let label_or_attr = label_or_attr.into();
         let expr = expr.into();
+        let mut required_names = expr.required_names();
+        if let LabelOrAttr::Label(_) = label_or_attr {
+            required_names.push(label_or_attr.clone());
+        }
 
         Self {
-            required_names: match label_or_attr {
-                LabelOrAttr::Attr(_) => vec![],
-                LabelOrAttr::Label(_) => vec![label_or_attr.clone()]
-            },
+            required_names,
             label_or_attr,
-            expr
+            expr,
         }
     }
 }

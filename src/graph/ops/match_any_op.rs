@@ -59,9 +59,15 @@ impl MatchAnyOp {
             .max()
             .unwrap_or(0);
         let all_literals = patterns.iter_exprs().count() == 0;
+        let mut required_names = vec![transform_expr.before(0).into()];
+        required_names.extend(
+            patterns
+                .iter_exprs()
+                .flat_map(|(_, e)| e.required_names().into_iter()),
+        );
 
         Self {
-            required_names: vec![transform_expr.before(0).into()],
+            required_names,
             label: transform_expr.before(0),
             new_labels,
             patterns,
@@ -290,8 +296,9 @@ impl GraphNode for MatchAnyOp {
                     };
                     let text_around = &text[text_start..text_end];
                     let t = t.get(pattern_len);
-                    hamming_search(text_around, pattern_str, t)
-                        .map(|(m, start_idx, end_idx)| (m, text_start + start_idx, text_start + end_idx))
+                    hamming_search(text_around, pattern_str, t).map(|(m, start_idx, end_idx)| {
+                        (m, text_start + start_idx, text_start + end_idx)
+                    })
                 }
                 GlobalAln(identity) => aligner_cell
                     .as_ref()
@@ -316,7 +323,9 @@ impl GraphNode for MatchAnyOp {
                         .unwrap()
                         .borrow_mut()
                         .align(text_around, pattern_str, identity, overlap)
-                        .map(|(m, start_idx, end_idx)| (m, text_start + start_idx, text_start + end_idx))
+                        .map(|(m, start_idx, end_idx)| {
+                            (m, text_start + start_idx, text_start + end_idx)
+                        })
                 }
                 PrefixAln { identity, overlap } => {
                     let a = additional(identity, pattern_len);
