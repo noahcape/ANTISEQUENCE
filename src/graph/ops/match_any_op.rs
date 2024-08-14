@@ -291,7 +291,7 @@ impl GraphNode for MatchAnyOp {
                     let text_around = &text[text_start..text_end];
                     let t = t.get(pattern_len);
                     hamming_search(text_around, pattern_str, t)
-                        .map(|(m, start_idx, end_idx)| (m, text_start + start_idx, end_idx))
+                        .map(|(m, start_idx, end_idx)| (m, text_start + start_idx, text_start + end_idx))
                 }
                 GlobalAln(identity) => aligner_cell
                     .as_ref()
@@ -316,7 +316,7 @@ impl GraphNode for MatchAnyOp {
                         .unwrap()
                         .borrow_mut()
                         .align(text_around, pattern_str, identity, overlap)
-                        .map(|(m, start_idx, end_idx)| (m, text_start + start_idx, end_idx))
+                        .map(|(m, start_idx, end_idx)| (m, text_start + start_idx, text_start + end_idx))
                 }
                 PrefixAln { identity, overlap } => {
                     let a = additional(identity, pattern_len);
