@@ -41,12 +41,8 @@ impl CountOp {
     }
 }
 
-impl GraphNode for CountOp {
-    fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(read) = read else {
-            panic!("Expected some read!")
-        };
-
+impl<T: Trace> GraphNode<T> for CountOp {
+    fn run_inner(&self, read: Read) -> Result<(Option<Read>, bool)> {
         for (c, n) in self.counts.iter().zip(&self.selector_exprs) {
             if n.eval_bool(&read).map_err(|e| Error::NameError {
                 source: e,

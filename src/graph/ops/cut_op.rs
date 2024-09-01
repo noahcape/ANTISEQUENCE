@@ -33,16 +33,12 @@ impl CutOp {
     }
 }
 
-impl GraphNode for CutOp {
-    fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(mut read) = read else {
-            panic!("Expected some read!")
-        };
-
+impl<T: Trace> GraphNode<T> for CutOp {
+    fn run_inner(&self, mut read: Read) -> Result<(Option<Read>, bool)> {
         let cut_idx = self.cut_idx.eval_int(&read).map_err(|e| Error::NameError {
             source: e,
             read: read.clone(),
-            context: self.name(),
+            context: Self::NAME,
         })?;
 
         read.cut(
@@ -55,7 +51,7 @@ impl GraphNode for CutOp {
         .map_err(|e| Error::NameError {
             source: e,
             read: read.clone(),
-            context: self.name(),
+            context: Self::NAME,
         })?;
 
         Ok((Some(read), false))

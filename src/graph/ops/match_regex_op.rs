@@ -40,12 +40,8 @@ impl MatchRegexOp {
     }
 }
 
-impl GraphNode for MatchRegexOp {
-    fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(mut read) = read else {
-            panic!("Expected some read!")
-        };
-
+impl<T: Trace> GraphNode<T> for MatchRegexOp {
+    fn run_inner(&self, mut read: Read) -> Result<(Option<Read>, bool)> {
         let regex = self.regex_local.get_or(|| self.regex.clone());
         let cap_names = regex
             .capture_names()

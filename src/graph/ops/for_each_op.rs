@@ -13,11 +13,8 @@ impl<F: Fn(&mut Read) + Send + Sync> ForEachOp<F> {
     }
 }
 
-impl<F: Fn(&mut Read) + Send + Sync> GraphNode for ForEachOp<F> {
-    fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(mut read) = read else {
-            panic!("Expected some read!")
-        };
+impl<F: Fn(&mut Read) + Send + Sync, T: Trace> GraphNode<T> for ForEachOp<F> {
+    fn run_inner(&self, mut read: Read) -> Result<(Option<Read>, bool)> {
         (self.func)(&mut read);
         Ok((Some(read), false))
     }

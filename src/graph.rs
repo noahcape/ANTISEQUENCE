@@ -1,34 +1,47 @@
 use std::marker::{Send, Sync};
 use std::ops::RangeBounds;
+use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 
 use crate::errors::*;
 use crate::expr::*;
 use crate::read::*;
+use crate::trace::*;
 
 mod ops;
 pub use ops::*;
 
 /// Computation graph of read operations, where each operation is a node.
-pub struct Graph {
-    nodes: Vec<Arc<dyn GraphNode>>,
+pub struct Graph<T: Trace = NoTrace> {
+    nodes: Vec<Arc<dyn GraphNode<T>>>,
 }
 
-pub trait GraphNode: Send + Sync {
-    fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)>;
+pub trait GraphNode<T: Trace = NoTrace>: Send + Sync {
+    fn run(&self, read: Option<Read>, trace: &T) -> Result<(Option<Read>, bool)> {
+        let start = trace.start(&read);
+        let Some(read) = read else {
+            panic!("Expected some read!")
+        };
+        let res = self.run_inner(read)?;
+        trace.add(self.name(), start, &res.0);
+        Ok(res)
+    }
+    fn run_inner(&self, _read: Read) -> Result<(Option<Read>, bool)> {
+        unimplemented!()
+    }
     fn required_names(&self) -> &[LabelOrAttr];
     fn name(&self) -> &'static str;
 }
 
-impl Graph {
+impl<T: Trace> Graph<T> {
     /// Create a new empty graph.
     pub fn new() -> Self {
         Self { nodes: Vec::new() }
     }
 
     /// Add a read operation node to the graph and return the node.
-    pub fn add<G: GraphNode + 'static>(&mut self, node: G) -> Arc<G> {
+    pub fn add<G: GraphNode<T> + 'static>(&mut self, node: G) -> Arc<G> {
         let a = Arc::new(node);
         let b = Arc::clone(&a);
         self.nodes.push(a);
@@ -37,8 +50,20 @@ impl Graph {
 
     /// Run a graph until all reads processed.
     pub fn run(&self) -> Result<()> {
+        self.run_trace(DEFAULT_TRACE_PATH)
+    }
+
+    /// Run a graph until all reads processed, outputting the trace to the specified path.
+    pub fn run_trace(&self, trace_path: impl AsRef<Path>) -> Result<()> {
+        let trace = T::new(trace_path);
+        let res = self.run_trace_inner(&trace);
+        trace.finish();
+        res
+    }
+
+    fn run_trace_inner(&self, trace: &T) -> Result<()> {
         loop {
-            let (_, done) = self.run_one(None)?;
+            let (_, done) = self.run_one(None, trace)?;
             if done {
                 break;
             }
@@ -49,11 +74,25 @@ impl Graph {
 
     /// Run a graph in parallel (multithreading) until all reads processed.
     pub fn run_with_threads(&self, threads: usize) {
+        self.run_with_threads_trace(threads, DEFAULT_TRACE_PATH);
+    }
+
+    /// Run a graph in parallel (multithreading) until all reads processed, with tracing.
+    pub fn run_with_threads_trace(&self, threads: usize, trace_path: impl AsRef<Path>) {
+        let trace = T::new(trace_path);
+        self.run_with_threads_trace_inner(threads, &trace);
+        trace.finish();
+    }
+
+    fn run_with_threads_trace_inner(&self, threads: usize, trace: &T) {
         assert!(threads >= 1, "Number of threads must be greater than zero");
 
         thread::scope(|s| {
             for _ in 0..threads {
-                s.spawn(|| self.run().unwrap_or_else(|e| panic!("{e}")));
+                s.spawn(|| {
+                    self.run_trace_inner(&trace)
+                        .unwrap_or_else(|e| panic!("{e}"))
+                });
             }
         });
     }
@@ -63,7 +102,7 @@ impl Graph {
     /// Returns an additional boolean indicating whether the graph is done executing.
     /// If the required label or attribute names for an operation are not available,
     /// the the operation is skipped.
-    pub fn run_one(&self, mut curr: Option<Read>) -> Result<(Option<Read>, bool)> {
+    pub fn run_one(&self, mut curr: Option<Read>, trace: &T) -> Result<(Option<Read>, bool)> {
         for node in &self.nodes {
             if let Some(read) = &curr {
                 if !read.has_names(node.required_names()) {
@@ -71,7 +110,7 @@ impl Graph {
                 }
             }
 
-            let (c, done) = node.run(curr)?;
+            let (c, done) = node.run(curr, trace)?;
             curr = c;
 
             if done {
@@ -90,7 +129,11 @@ impl Graph {
     /// Returns two booleans: the first one is whether the read has "failed" (does not have
     /// a required label or attribute name) and the second one is whether the graph is done
     /// executing.
-    pub fn try_run_one(&self, mut curr: Option<Read>) -> Result<(Option<Read>, bool, bool)> {
+    pub fn try_run_one(
+        &self,
+        mut curr: Option<Read>,
+        trace: &T,
+    ) -> Result<(Option<Read>, bool, bool)> {
         for node in &self.nodes {
             if let Some(read) = &curr {
                 if !read.has_names(node.required_names()) {
@@ -98,7 +141,7 @@ impl Graph {
                 }
             }
 
-            let (c, done) = node.run(curr)?;
+            let (c, done) = node.run(curr, trace)?;
             curr = c;
 
             if done {

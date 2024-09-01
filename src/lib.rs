@@ -91,6 +91,7 @@ pub mod expr;
 pub mod graph;
 mod patterns;
 mod read;
+pub mod trace;
 
 mod inline_string;
 mod parse_utils;

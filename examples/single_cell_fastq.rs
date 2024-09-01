@@ -26,7 +26,7 @@ AAAATTTTCCCCGGGGATATAT
 
     let adapters = ["ATATATATAT", "CGCGCGCGCG"];
 
-    let mut g = Graph::new();
+    let mut g = <Graph>::new();
     g.add(
         InputFastqOp::from_interleaved_reader(fastq.as_slice(), 2)
             .unwrap_or_else(|e| panic!("{e}")),
