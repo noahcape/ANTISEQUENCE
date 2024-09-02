@@ -55,10 +55,10 @@ impl Trace for TraceReads {
     }
 
     fn add(&self, name: &str, start: Self::S, read: &Option<Read>) {
-        let start_ns = start.0.as_nanos() as u64;
-        let dur = start.1.elapsed().as_nanos() as u64;
+        let start_us = (start.0.as_nanos() as f64) / 1000.0f64;
+        let dur_us = (start.1.elapsed().as_nanos() as f64) / 1000.0f64;
         let first_idx = read.as_ref().map(|r| r.first_idx()).or(start.2).unwrap();
-        let event = TraceEvent::new(name, start_ns, dur, first_idx, read);
+        let event = TraceEvent::new(name, start_us, dur_us, first_idx, read);
         let mut writer = self.writer.lock().unwrap();
 
         if !writer.0 {
@@ -97,8 +97,7 @@ static BEFORE: &'static [u8] = br#"{
 "#;
 
 static AFTER: &'static [u8] = br#"
-  ],
-  "displayTimeUnit": "ns",
+  ]
 }
 "#;
 
@@ -106,8 +105,8 @@ static AFTER: &'static [u8] = br#"
 struct TraceEvent<'a> {
     name: &'a str,
     ph: char,
-    ts: u64,
-    dur: u64,
+    ts: f64,
+    dur: f64,
     pid: usize,
     tid: usize,
     args: Args,
@@ -119,7 +118,7 @@ struct Args {
 }
 
 impl<'a> TraceEvent<'a> {
-    pub fn new(name: &'a str, start: u64, dur: u64, tid: usize, read: &'a Option<Read>) -> Self {
+    pub fn new(name: &'a str, start: f64, dur: f64, tid: usize, read: &'a Option<Read>) -> Self {
         Self {
             name,
             ph: 'X',
