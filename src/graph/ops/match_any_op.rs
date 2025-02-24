@@ -156,7 +156,10 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                     (&text[offset..], offset, false)
                 }
                 ExactSearch => (text, 0, true),
-                ExactBoundedMatch { from, to } => (&text[from..to], 0, false),
+                ExactBoundedMatch { from, to } => {
+                    let to = text.len().min(to);
+                    (&text[from..to], 0, false)
+                },
                 Hamming(_) => (text, 0, false),
                 HammingPrefix(_) => (&text[..text.len().min(self.max_literal_len)], 0, false),
                 HammingSuffix(_) => {
@@ -168,7 +171,10 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                     threshold: _,
                     from,
                     to,
-                } => (&text[from..to], 0, false),
+                } => {
+                    let to = text.len().min(to);
+                    (&text[from..to], 0, false)
+                },
                 GlobalAln(_) => (text, 0, false),
                 LocalAln { .. } => (text, 0, true),
                 PrefixAln { identity, .. } => (
@@ -267,6 +273,7 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                         .map(|i| (pattern_len, text_start + i, text_start + i + pattern_len))
                 }
                 ExactBoundedMatch { from, to } => {
+                    let to = text.len().min(to);
                     let text_around = &text[from..to];
                     memmem::find(text_around, pattern_str)
                         .map(|i| (pattern_len, from + i, from + i + pattern_len))
@@ -313,6 +320,7 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                     to,
                 } => {
                     let t = t.get(pattern_len);
+                    let to = text.len().min(to);
                     let text_around = &text[from..to];
                     hamming_search(text_around, pattern_str, t)
                         .map(|(m, start_idx, end_idx)| (m, from + start_idx, from + end_idx))
