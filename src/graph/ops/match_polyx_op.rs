@@ -34,12 +34,8 @@ impl MatchPolyXOp {
     }
 }
 
-impl GraphNode for MatchPolyXOp {
-    fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(mut read) = read else {
-            panic!("Expected some read!")
-        };
-
+impl<T: Trace> GraphNode<T> for MatchPolyXOp {
+    fn run_inner(&self, mut read: Read) -> Result<(Option<Read>, bool)> {
         let string = read
             .substring(self.label.str_type, self.label.label)
             .map_err(|e| Error::NameError {

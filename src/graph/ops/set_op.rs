@@ -37,12 +37,8 @@ impl SetOp {
     }
 }
 
-impl GraphNode for SetOp {
-    fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(mut read) = read else {
-            panic!("Expected some read!")
-        };
-
+impl<T: Trace> GraphNode<T> for SetOp {
+    fn run_inner(&self, mut read: Read) -> Result<(Option<Read>, bool)> {
         match &self.label_or_attr {
             LabelOrAttr::Label(label) => {
                 let new_bytes = self

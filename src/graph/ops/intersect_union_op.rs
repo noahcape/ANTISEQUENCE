@@ -31,12 +31,8 @@ impl IntersectOp {
     }
 }
 
-impl GraphNode for IntersectOp {
-    fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(mut read) = read else {
-            panic!("Expected some read!")
-        };
-
+impl<T: Trace> GraphNode<T> for IntersectOp {
+    fn run_inner(&self, mut read: Read) -> Result<(Option<Read>, bool)> {
         read.intersect(
             self.label1.str_type,
             self.label1.label,
@@ -95,12 +91,8 @@ impl UnionOp {
     }
 }
 
-impl GraphNode for UnionOp {
-    fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(mut read) = read else {
-            panic!("Expected some read!")
-        };
-
+impl<T: Trace> GraphNode<T> for UnionOp {
+    fn run_inner(&self, mut read: Read) -> Result<(Option<Read>, bool)> {
         read.union(
             self.label1.str_type,
             self.label1.label,

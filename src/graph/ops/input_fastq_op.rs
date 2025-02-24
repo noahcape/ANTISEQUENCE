@@ -126,8 +126,9 @@ impl<'reader> InputFastqOp<'reader> {
     }
 }
 
-impl<'reader> GraphNode for InputFastqOp<'reader> {
-    fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
+impl<'reader, T: Trace> GraphNode<T> for InputFastqOp<'reader> {
+    fn run(&self, read: Option<Read>, trace: &T) -> Result<(Option<Read>, bool)> {
+        let start = trace.start(&read);
         assert!(read.is_none(), "Expected no input reads for {}", Self::NAME);
 
         let buf = self
@@ -204,7 +205,9 @@ impl<'reader> GraphNode for InputFastqOp<'reader> {
             return Ok((None, true));
         }
 
-        Ok((b.pop_front(), false))
+        let res = b.pop_front();
+        trace.add(<Self as GraphNode<T>>::name(self), start, &res);
+        Ok((res, false))
     }
 
     fn required_names(&self) -> &[LabelOrAttr] {

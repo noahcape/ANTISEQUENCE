@@ -3,7 +3,7 @@ use antisequence::graph::*;
 use antisequence::*;
 
 fn main() {
-    let mut g = Graph::new();
+    let mut g = <Graph>::new();
     g.add(InputFastqOp::from_file("example_data/simple.fastq").unwrap_or_else(|e| panic!("{e}")));
     g.add(CutOp::new(tr!(seq1.* -> seq1.a, seq1.b), 3));
     g.add(CutOp::new(tr!(seq1.b -> _, seq1.b), -4));

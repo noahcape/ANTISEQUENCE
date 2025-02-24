@@ -5,16 +5,16 @@ use std::time::{Duration, Instant};
 
 use crate::graph::*;
 
-pub struct TimeOp {
+pub struct TimeOp<T: Trace = NoTrace> {
     duration: ThreadLocal<Cell<Duration>>,
-    graph: Graph,
+    graph: Graph<T>,
 }
 
-impl TimeOp {
+impl<T: Trace> TimeOp<T> {
     const NAME: &'static str = "TimeOp";
 
     /// Track the runtime of the graph.
-    pub fn new(graph: Graph) -> Self {
+    pub fn new(graph: Graph<T>) -> Self {
         Self {
             duration: ThreadLocal::new(),
             graph,
@@ -28,14 +28,16 @@ impl TimeOp {
     }
 }
 
-impl GraphNode for TimeOp {
-    fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
+impl<T: Trace> GraphNode<T> for TimeOp<T> {
+    fn run(&self, read: Option<Read>, trace: &T) -> Result<(Option<Read>, bool)> {
+        let s = trace.start(&read);
         let start = Instant::now();
-        let res = self.graph.run_one(read);
+        let res = self.graph.run_one(read, trace)?;
         let elapsed = start.elapsed();
         let duration = self.duration.get_or(|| Cell::new(Duration::default()));
         duration.set(duration.get() + elapsed);
-        res
+        trace.add(self.name(), s, &res.0);
+        Ok(res)
     }
 
     fn required_names(&self) -> &[LabelOrAttr] {

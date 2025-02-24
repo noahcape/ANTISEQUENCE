@@ -18,12 +18,8 @@ impl RetainOp {
     }
 }
 
-impl GraphNode for RetainOp {
-    fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(read) = read else {
-            panic!("Expected some read!")
-        };
-
+impl<T: Trace> GraphNode<T> for RetainOp {
+    fn run_inner(&self, read: Read) -> Result<(Option<Read>, bool)> {
         if self
             .selector_expr
             .eval_bool(&read)

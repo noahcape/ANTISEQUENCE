@@ -43,12 +43,8 @@ impl<'writer> OutputJsonOp<'writer> {
     }
 }
 
-impl<'writer> GraphNode for OutputJsonOp<'writer> {
-    fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(read) = read else {
-            panic!("Expected some read!")
-        };
-
+impl<'writer, T: Trace> GraphNode<T> for OutputJsonOp<'writer> {
+    fn run_inner(&self, read: Read) -> Result<(Option<Read>, bool)> {
         let mut writer = self.writer.lock().unwrap();
         serde_json::to_writer(&mut *writer, &SerializableRead::from(&read))
             .map_err(|e| Error::BytesIo(Box::new(e)))?;

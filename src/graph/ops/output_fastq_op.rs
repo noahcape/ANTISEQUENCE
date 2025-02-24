@@ -73,12 +73,8 @@ impl OutputFastqFileOp {
     }
 }
 
-impl GraphNode for OutputFastqFileOp {
-    fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(read) = read else {
-            panic!("Expected some read!")
-        };
-
+impl<T: Trace> GraphNode<T> for OutputFastqFileOp {
+    fn run_inner(&self, read: Read) -> Result<(Option<Read>, bool)> {
         for (i, file_expr) in self.file_exprs.iter().enumerate() {
             let file_name = file_expr
                 .eval_bytes(&read, false)
@@ -143,12 +139,8 @@ impl<'writer> OutputFastqOp<'writer> {
     }
 }
 
-impl<'writer> GraphNode for OutputFastqOp<'writer> {
-    fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(read) = read else {
-            panic!("Expected some read!")
-        };
-
+impl<'writer, T: Trace> GraphNode<T> for OutputFastqOp<'writer> {
+    fn run_inner(&self, read: Read) -> Result<(Option<Read>, bool)> {
         for (i, writer) in self.writers.iter().enumerate() {
             let record = read.to_fastq((i + 1) as _).map_err(|e| Error::NameError {
                 source: e,

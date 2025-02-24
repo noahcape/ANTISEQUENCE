@@ -1,9 +1,10 @@
 use antisequence::expr::*;
 use antisequence::graph::*;
+use antisequence::trace::*;
 use antisequence::*;
 
 fn main() {
-    let mut g = Graph::new();
+    let mut g = Graph::<TraceReads>::new();
     g.add(InputFastqOp::from_file("example_data/match.fastq").unwrap_or_else(|e| panic!("{e}")));
     let patterns = Patterns::from_strs(["AAAA", "TTTT"]);
     g.add(MatchAnyOp::new(

@@ -28,12 +28,8 @@ impl BernoulliOp {
     }
 }
 
-impl GraphNode for BernoulliOp {
-    fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(mut read) = read else {
-            panic!("Expected some read!")
-        };
-
+impl<T: Trace> GraphNode<T> for BernoulliOp {
+    fn run_inner(&self, mut read: Read) -> Result<(Option<Read>, bool)> {
         // use the index of the read in the seed for determinism when multithreading
         let seed = (self.seed << 32).wrapping_add(read.first_idx() as u64);
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed);

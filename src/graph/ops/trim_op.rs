@@ -22,12 +22,8 @@ impl TrimOp {
     }
 }
 
-impl GraphNode for TrimOp {
-    fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(mut read) = read else {
-            panic!("Expected some read!")
-        };
-
+impl<T: Trace> GraphNode<T> for TrimOp {
+    fn run_inner(&self, mut read: Read) -> Result<(Option<Read>, bool)> {
         self.labels
             .iter()
             .try_for_each(|l| read.trim(l.str_type, l.label))

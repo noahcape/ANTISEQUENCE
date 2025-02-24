@@ -106,12 +106,8 @@ impl MatchAnyOp {
     }
 }
 
-impl GraphNode for MatchAnyOp {
-    fn run(&self, read: Option<Read>) -> Result<(Option<Read>, bool)> {
-        let Some(mut read) = read else {
-            panic!("Expected some read!")
-        };
-
+impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
+    fn run_inner(&self, mut read: Read) -> Result<(Option<Read>, bool)> {
         let text = read
             .substring(self.label.str_type, self.label.label)
             .map_err(|e| Error::NameError {
