@@ -160,6 +160,7 @@ impl GraphNode for MatchAnyOp {
                     (&text[offset..], offset, false)
                 }
                 ExactSearch => (text, 0, true),
+                ExactBoundedMatch { from, to } => (&text[from..to], 0, false),
                 Hamming(_) => (text, 0, false),
                 HammingPrefix(_) => (&text[..text.len().min(self.max_literal_len)], 0, false),
                 HammingSuffix(_) => {
@@ -167,6 +168,11 @@ impl GraphNode for MatchAnyOp {
                     (&text[offset..], offset, false)
                 }
                 HammingSearch(_) => (text, 0, true),
+                HammingBoundedMatch {
+                    threshold: _,
+                    from,
+                    to,
+                } => (&text[from..to], 0, false),
                 GlobalAln(_) => (text, 0, false),
                 LocalAln { .. } => (text, 0, true),
                 PrefixAln { identity, .. } => (
@@ -264,6 +270,11 @@ impl GraphNode for MatchAnyOp {
                     memmem::find(text_around, pattern_str)
                         .map(|i| (pattern_len, text_start + i, text_start + i + pattern_len))
                 }
+                ExactBoundedMatch { from, to } => {
+                    let text_around = &text[from..to];
+                    memmem::find(text_around, pattern_str)
+                        .map(|i| (pattern_len, from + i, from + i + pattern_len))
+                }
                 Hamming(t) => {
                     let t = t.get(pattern_len);
                     hamming(text, pattern_str, t).map(|m| (m, pattern_len, 0))
@@ -299,6 +310,16 @@ impl GraphNode for MatchAnyOp {
                     hamming_search(text_around, pattern_str, t).map(|(m, start_idx, end_idx)| {
                         (m, text_start + start_idx, text_start + end_idx)
                     })
+                }
+                HammingBoundedMatch {
+                    threshold: t,
+                    from,
+                    to,
+                } => {
+                    let t = t.get(pattern_len);
+                    let text_around = &text[from..to];
+                    hamming_search(text_around, pattern_str, t)
+                        .map(|(m, start_idx, end_idx)| (m, from + start_idx, from + end_idx))
                 }
                 GlobalAln(identity) => aligner_cell
                     .as_ref()

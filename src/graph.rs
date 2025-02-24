@@ -193,6 +193,22 @@ pub enum MatchType {
     /// A match will result in two new interval: the rest of the string and the matched
     /// suffix.
     SuffixAln { identity: f64, overlap: f64 },
+    /// Exact-alignment within a range.
+    ///
+    /// A match will result in three new intervals: everything before the aligned region, the aligned
+    /// region, and everything after the aligned region.
+    /// Use inclusive range indexing, from..=to
+    ExactBoundedMatch { from: usize, to: usize },
+    /// Hamming-distance-based alignment within a range.
+    ///
+    /// A match will result in three new intervals: everything before the aligned region, the aligned
+    /// region, and everything after the aligned region.
+    /// Use inclusive range indexing, from..=to
+    HammingBoundedMatch {
+        threshold: Threshold,
+        from: usize,
+        to: usize,
+    },
 }
 
 impl MatchType {
@@ -206,7 +222,11 @@ impl MatchType {
             | HammingSuffix(_)
             | PrefixAln { .. }
             | SuffixAln { .. } => 2,
-            ExactSearch | HammingSearch(_) | LocalAln { .. } => 3,
+            ExactSearch
+            | HammingSearch(_)
+            | LocalAln { .. }
+            | HammingBoundedMatch { .. }
+            | ExactBoundedMatch { .. } => 3,
         }
     }
 
@@ -218,10 +238,12 @@ impl MatchType {
             ExactPrefix => len,
             ExactSuffix => len,
             ExactSearch => len,
+            ExactBoundedMatch { .. } => len,
             Hamming(t) => k_from_edits(len, t.get(len)),
             HammingPrefix(t) => k_from_edits(len, t.get(len)),
             HammingSuffix(t) => k_from_edits(len, t.get(len)),
             HammingSearch(t) => k_from_edits(len, t.get(len)),
+            HammingBoundedMatch { threshold: t, .. } => k_from_edits(len, t.get(len)),
             GlobalAln(identity) => {
                 k_from_edits(len, len - (((len as f64) * identity).ceil() as usize))
             }
