@@ -274,7 +274,7 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                 }
                 ExactBoundedMatch { from, to } => {
                     let to = text.len().min(to);
-                    let text_around = &text[from..to];
+                    let text_around = &text[from..=to];
                     memmem::find(text_around, pattern_str)
                         .map(|i| (pattern_len, from + i, from + i + pattern_len))
                 }
@@ -321,7 +321,7 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                 } => {
                     let t = t.get(pattern_len);
                     let to = text.len().min(to);
-                    let text_around = &text[from..to];
+                    let text_around = &text[from..=to];
                     hamming_search(text_around, pattern_str, t)
                         .map(|(m, start_idx, end_idx)| (m, from + start_idx, from + end_idx))
                 }
