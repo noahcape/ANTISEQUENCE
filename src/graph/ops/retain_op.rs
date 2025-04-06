@@ -42,4 +42,8 @@ impl<T: Trace> GraphNode<T> for RetainOp {
     fn name(&self) -> &'static str {
         Self::NAME
     }
+
+    fn finish(&self) -> Result<bool> {
+        Ok(true)
+    }
 }

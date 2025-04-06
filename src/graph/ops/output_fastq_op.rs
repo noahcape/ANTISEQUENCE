@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::sync::{Arc, Mutex};
@@ -8,10 +9,14 @@ use flate2::{write::GzEncoder, Compression};
 
 use crate::graph::*;
 
+const MEGABYTE: usize = 1000000;
+
 pub struct OutputFastqFileOp {
     required_names: Vec<LabelOrAttr>,
     file_exprs: Vec<Expr>,
     file_writers: Mutex<FxHashMap<Vec<u8>, Arc<Mutex<dyn Write + Send>>>>,
+    buffer: Mutex<Vec<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)>>,
+    buffer_size: Mutex<usize>,
 }
 
 impl OutputFastqFileOp {
@@ -25,6 +30,8 @@ impl OutputFastqFileOp {
             required_names: file_expr.required_names(),
             file_exprs: vec![file_expr],
             file_writers: Mutex::new(FxHashMap::default()),
+            buffer: Mutex::new(vec![]),
+            buffer_size: Mutex::new(0),
         }
     }
 
@@ -40,6 +47,8 @@ impl OutputFastqFileOp {
             required_names,
             file_exprs,
             file_writers: Mutex::new(FxHashMap::default()),
+            buffer: Mutex::new(vec![]),
+            buffer_size: Mutex::new(0),
         }
     }
 
@@ -84,19 +93,45 @@ impl<T: Trace> GraphNode<T> for OutputFastqFileOp {
                     context: Self::NAME,
                 })?;
 
-            let locked_writer = self.get_writer(&file_name).map_err(|e| Error::FileIo {
-                file: utf8(&file_name),
-                source: Box::new(e),
-            })?;
-
             let record = read.to_fastq((i + 1) as _).map_err(|e| Error::NameError {
                 source: e,
                 read: read.clone(),
                 context: Self::NAME,
             })?;
 
-            let mut writer = locked_writer.lock().unwrap();
-            write_fastq_record(&mut *writer, record);
+            if matches!(
+                self.buffer_size.lock().unwrap().cmp(&MEGABYTE),
+                Ordering::Less
+            ) {
+                self.buffer.lock().unwrap().push((
+                    record.0.to_vec(),
+                    record.1.to_vec(),
+                    record.2.to_vec(),
+                    file_name.to_vec(),
+                ));
+                (*self.buffer_size.lock().unwrap()) += record_size(record);
+            } else {
+                for (s, r, c, fname) in self.buffer.lock().unwrap().iter() {
+                    let locked_writer = self.get_writer(&fname).map_err(|e| Error::FileIo {
+                        file: utf8(&fname),
+                        source: Box::new(e),
+                    })?;
+
+                    let mut writer = locked_writer.lock().unwrap();
+                    write_fastq_record(&mut *writer, (&s, &r, &c));
+                }
+
+                let locked_writer = self.get_writer(&file_name).map_err(|e| Error::FileIo {
+                    file: utf8(&file_name),
+                    source: Box::new(e),
+                })?;
+
+                let mut writer = locked_writer.lock().unwrap();
+                write_fastq_record(&mut *writer, record);
+
+                self.buffer.lock().unwrap().clear();
+                *self.buffer_size.lock().unwrap() = 0;
+            }
         }
 
         Ok((Some(read), false))
@@ -108,6 +143,23 @@ impl<T: Trace> GraphNode<T> for OutputFastqFileOp {
 
     fn name(&self) -> &'static str {
         Self::NAME
+    }
+
+    fn finish(&self) -> Result<bool> {
+        for (s, r, c, file_name) in self.buffer.lock().unwrap().iter() {
+            let locked_writer = self.get_writer(&file_name).map_err(|e| Error::FileIo {
+                file: utf8(&file_name),
+                source: Box::new(e),
+            })?;
+
+            let mut writer = locked_writer.lock().unwrap();
+            write_fastq_record(&mut *writer, (&s, &r, &c));
+        }
+
+        self.buffer.lock().unwrap().clear();
+        *self.buffer_size.lock().unwrap() = 0;
+
+        Ok(true)
     }
 }
 
@@ -162,6 +214,10 @@ impl<'writer, T: Trace> GraphNode<T> for OutputFastqOp<'writer> {
     fn name(&self) -> &'static str {
         Self::NAME
     }
+
+    fn finish(&self) -> Result<bool> {
+        Ok(true)
+    }
 }
 
 pub fn write_fastq_record(
@@ -175,4 +231,9 @@ pub fn write_fastq_record(
     writer.write_all(b"\n+\n").unwrap();
     writer.write_all(&record.2).unwrap();
     writer.write_all(b"\n").unwrap();
+}
+
+pub fn record_size(record: (&[u8], &[u8], &[u8])) -> usize {
+    let (source, read, context) = record;
+    core::mem::size_of_val(source) + core::mem::size_of_val(read) + core::mem::size_of_val(context)
 }

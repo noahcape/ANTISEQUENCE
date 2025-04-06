@@ -32,6 +32,7 @@ pub trait GraphNode<T: Trace = NoTrace>: Send + Sync {
     }
     fn required_names(&self) -> &[LabelOrAttr];
     fn name(&self) -> &'static str;
+    fn finish(&self) -> Result<bool>;
 }
 
 impl<T: Trace> Graph<T> {
@@ -69,7 +70,15 @@ impl<T: Trace> Graph<T> {
             }
         }
 
+        self.drop_all();
+
         Ok(())
+    }
+
+    fn drop_all(&self) {
+        for node in &self.nodes {
+            let _ = node.finish();
+        }
     }
 
     /// Run a graph in parallel (multithreading) until all reads processed.

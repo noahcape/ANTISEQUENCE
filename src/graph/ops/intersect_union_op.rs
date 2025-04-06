@@ -55,6 +55,10 @@ impl<T: Trace> GraphNode<T> for IntersectOp {
     fn name(&self) -> &'static str {
         Self::NAME
     }
+
+    fn finish(&self) -> Result<bool> {
+        Ok(true)
+    }
 }
 
 pub struct UnionOp {
@@ -114,5 +118,9 @@ impl<T: Trace> GraphNode<T> for UnionOp {
 
     fn name(&self) -> &'static str {
         Self::NAME
+    }
+
+    fn finish(&self) -> Result<bool> {
+        Ok(true)
     }
 }

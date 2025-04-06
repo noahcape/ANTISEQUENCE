@@ -472,6 +472,10 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
     fn name(&self) -> &'static str {
         Self::NAME
     }
+
+    fn finish(&self) -> Result<bool> {
+        Ok(true)
+    }
 }
 
 fn hamming(a: &[u8], b: &[u8], threshold: usize) -> Option<usize> {

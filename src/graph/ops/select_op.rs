@@ -52,4 +52,8 @@ impl<T: Trace> GraphNode<T> for SelectOp<T> {
     fn name(&self) -> &'static str {
         Self::NAME
     }
+
+    fn finish(&self) -> Result<bool> {
+        Ok(true)
+    }
 }

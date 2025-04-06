@@ -69,6 +69,10 @@ impl<T: Trace> GraphNode<T> for MatchPolyXOp {
     fn name(&self) -> &'static str {
         Self::NAME
     }
+
+    fn finish(&self) -> Result<bool> {
+        Ok(true)
+    }
 }
 
 const MATCH: i32 = 1i32;

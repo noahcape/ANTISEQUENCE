@@ -33,4 +33,8 @@ impl<T: Trace> GraphNode<T> for ForkOp<T> {
     fn name(&self) -> &'static str {
         Self::NAME
     }
+
+    fn finish(&self) -> Result<bool> {
+        Ok(true)
+    }
 }

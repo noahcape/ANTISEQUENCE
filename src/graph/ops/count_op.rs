@@ -63,4 +63,8 @@ impl<T: Trace> GraphNode<T> for CountOp {
     fn name(&self) -> &'static str {
         Self::NAME
     }
+
+    fn finish(&self) -> Result<bool> {
+        Ok(true)
+    }
 }

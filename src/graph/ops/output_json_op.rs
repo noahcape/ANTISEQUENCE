@@ -60,4 +60,8 @@ impl<'writer, T: Trace> GraphNode<T> for OutputJsonOp<'writer> {
     fn name(&self) -> &'static str {
         Self::NAME
     }
+
+    fn finish(&self) -> Result<bool> {
+        Ok(true)
+    }
 }

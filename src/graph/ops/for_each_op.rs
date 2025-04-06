@@ -26,6 +26,10 @@ impl<F: Fn(&mut Read) + Send + Sync, T: Trace> GraphNode<T> for ForEachOp<F> {
     fn name(&self) -> &'static str {
         Self::NAME
     }
+
+    fn finish(&self) -> Result<bool> {
+        Ok(true)
+    }
 }
 
 pub struct DbgOp;
