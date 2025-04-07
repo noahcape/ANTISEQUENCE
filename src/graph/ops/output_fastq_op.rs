@@ -1,4 +1,6 @@
 use std::cmp::Ordering;
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::sync::{Arc, Mutex};
@@ -15,7 +17,7 @@ pub struct OutputFastqFileOp {
     required_names: Vec<LabelOrAttr>,
     file_exprs: Vec<Expr>,
     file_writers: Mutex<FxHashMap<Vec<u8>, Arc<Mutex<dyn Write + Send>>>>,
-    buffer: Mutex<Vec<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)>>,
+    buffer: Mutex<HashMap<Vec<u8>, Vec<(Vec<u8>, Vec<u8>, Vec<u8>)>>>,
     buffer_size: Mutex<usize>,
 }
 
@@ -30,7 +32,7 @@ impl OutputFastqFileOp {
             required_names: file_expr.required_names(),
             file_exprs: vec![file_expr],
             file_writers: Mutex::new(FxHashMap::default()),
-            buffer: Mutex::new(vec![]),
+            buffer: Mutex::new(HashMap::new()),
             buffer_size: Mutex::new(0),
         }
     }
@@ -47,7 +49,7 @@ impl OutputFastqFileOp {
             required_names,
             file_exprs,
             file_writers: Mutex::new(FxHashMap::default()),
-            buffer: Mutex::new(vec![]),
+            buffer: Mutex::new(HashMap::new()),
             buffer_size: Mutex::new(0),
         }
     }
@@ -103,22 +105,29 @@ impl<T: Trace> GraphNode<T> for OutputFastqFileOp {
                 self.buffer_size.lock().unwrap().cmp(&MEGABYTE),
                 Ordering::Less
             ) {
-                self.buffer.lock().unwrap().push((
-                    record.0.to_vec(),
-                    record.1.to_vec(),
-                    record.2.to_vec(),
-                    file_name.to_vec(),
-                ));
+                let tupled_record = (record.0.to_vec(), record.1.to_vec(), record.2.to_vec());
+                let mut locked_buffer = self.buffer.lock().unwrap();
+                match locked_buffer.entry(file_name.to_vec()) {
+                    Entry::Occupied(mut e) => {
+                        e.get_mut().push(tupled_record);
+                    }
+                    Entry::Vacant(e) => {
+                        e.insert(vec![tupled_record]);
+                    }
+                };
                 (*self.buffer_size.lock().unwrap()) += record_size(record);
             } else {
-                for (s, r, c, fname) in self.buffer.lock().unwrap().iter() {
+                let mut locked_buffer = self.buffer.lock().unwrap();
+                for fname in locked_buffer.keys() {
                     let locked_writer = self.get_writer(&fname).map_err(|e| Error::FileIo {
                         file: utf8(&fname),
                         source: Box::new(e),
                     })?;
 
                     let mut writer = locked_writer.lock().unwrap();
-                    write_fastq_record(&mut *writer, (&s, &r, &c));
+                    for (s, r, c) in locked_buffer.get(fname).unwrap() {
+                        write_fastq_record(&mut *writer, (&s, &r, &c));
+                    }
                 }
 
                 let locked_writer = self.get_writer(&file_name).map_err(|e| Error::FileIo {
@@ -129,7 +138,7 @@ impl<T: Trace> GraphNode<T> for OutputFastqFileOp {
                 let mut writer = locked_writer.lock().unwrap();
                 write_fastq_record(&mut *writer, record);
 
-                self.buffer.lock().unwrap().clear();
+                locked_buffer.clear();
                 *self.buffer_size.lock().unwrap() = 0;
             }
         }
@@ -146,17 +155,20 @@ impl<T: Trace> GraphNode<T> for OutputFastqFileOp {
     }
 
     fn finish(&self) -> Result<bool> {
-        for (s, r, c, file_name) in self.buffer.lock().unwrap().iter() {
-            let locked_writer = self.get_writer(&file_name).map_err(|e| Error::FileIo {
-                file: utf8(&file_name),
+        let mut locked_buffer = self.buffer.lock().unwrap();
+        for fname in locked_buffer.keys() {
+            let locked_writer = self.get_writer(&fname).map_err(|e| Error::FileIo {
+                file: utf8(&fname),
                 source: Box::new(e),
             })?;
 
             let mut writer = locked_writer.lock().unwrap();
-            write_fastq_record(&mut *writer, (&s, &r, &c));
+            for (s, r, c) in locked_buffer.get(fname).unwrap() {
+                write_fastq_record(&mut *writer, (&s, &r, &c));
+            }
         }
 
-        self.buffer.lock().unwrap().clear();
+        locked_buffer.clear();
         *self.buffer_size.lock().unwrap() = 0;
 
         Ok(true)
