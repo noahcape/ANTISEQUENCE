@@ -101,23 +101,26 @@ impl<T: Trace> GraphNode<T> for OutputFastqFileOp {
                 context: Self::NAME,
             })?;
 
+            let tupled_record = (record.0.to_vec(), record.1.to_vec(), record.2.to_vec());
+
+            let mut locked_buffer = self.buffer.lock().unwrap();
+            let mut locked_buffer_size = self.buffer_size.lock().unwrap();
+
+            match locked_buffer.entry(file_name.to_vec()) {
+                Entry::Occupied(mut e) => {
+                    e.get_mut().push(tupled_record);
+                }
+                Entry::Vacant(e) => {
+                    e.insert(vec![tupled_record]);
+                }
+            };
+
+            *locked_buffer_size += record_size(record);
+
             if matches!(
-                self.buffer_size.lock().unwrap().cmp(&MEGABYTE),
-                Ordering::Less
+                locked_buffer_size.cmp(&MEGABYTE),
+                Ordering::Greater | Ordering::Equal
             ) {
-                let tupled_record = (record.0.to_vec(), record.1.to_vec(), record.2.to_vec());
-                let mut locked_buffer = self.buffer.lock().unwrap();
-                match locked_buffer.entry(file_name.to_vec()) {
-                    Entry::Occupied(mut e) => {
-                        e.get_mut().push(tupled_record);
-                    }
-                    Entry::Vacant(e) => {
-                        e.insert(vec![tupled_record]);
-                    }
-                };
-                (*self.buffer_size.lock().unwrap()) += record_size(record);
-            } else {
-                let mut locked_buffer = self.buffer.lock().unwrap();
                 for fname in locked_buffer.keys() {
                     let locked_writer = self.get_writer(&fname).map_err(|e| Error::FileIo {
                         file: utf8(&fname),
@@ -130,16 +133,8 @@ impl<T: Trace> GraphNode<T> for OutputFastqFileOp {
                     }
                 }
 
-                let locked_writer = self.get_writer(&file_name).map_err(|e| Error::FileIo {
-                    file: utf8(&file_name),
-                    source: Box::new(e),
-                })?;
-
-                let mut writer = locked_writer.lock().unwrap();
-                write_fastq_record(&mut *writer, record);
-
                 locked_buffer.clear();
-                *self.buffer_size.lock().unwrap() = 0;
+                *locked_buffer_size = 0;
             }
         }
 
