@@ -1,9 +1,10 @@
-use std::cmp::Ordering;
+use std::cell::Cell;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::sync::{Arc, Mutex};
+use thread_local::ThreadLocal;
 
 use rustc_hash::FxHashMap;
 
@@ -17,8 +18,8 @@ pub struct OutputFastqFileOp {
     required_names: Vec<LabelOrAttr>,
     file_exprs: Vec<Expr>,
     file_writers: Mutex<FxHashMap<Vec<u8>, Arc<Mutex<dyn Write + Send>>>>,
-    buffer: Mutex<HashMap<Vec<u8>, Vec<(Vec<u8>, Vec<u8>, Vec<u8>)>>>,
-    buffer_size: Mutex<usize>,
+    buffer: ThreadLocal<Cell<HashMap<Vec<u8>, Vec<(Vec<u8>, Vec<u8>, Vec<u8>)>>>>,
+    buffer_size: ThreadLocal<Cell<usize>>,
 }
 
 impl OutputFastqFileOp {
@@ -32,8 +33,8 @@ impl OutputFastqFileOp {
             required_names: file_expr.required_names(),
             file_exprs: vec![file_expr],
             file_writers: Mutex::new(FxHashMap::default()),
-            buffer: Mutex::new(HashMap::new()),
-            buffer_size: Mutex::new(0),
+            buffer: ThreadLocal::<Cell<HashMap<Vec<u8>, Vec<(Vec<u8>, Vec<u8>, Vec<u8>)>>>>::new(),
+            buffer_size: ThreadLocal::<Cell<usize>>::new(),
         }
     }
 
@@ -49,8 +50,8 @@ impl OutputFastqFileOp {
             required_names,
             file_exprs,
             file_writers: Mutex::new(FxHashMap::default()),
-            buffer: Mutex::new(HashMap::new()),
-            buffer_size: Mutex::new(0),
+            buffer: ThreadLocal::<Cell<HashMap<Vec<u8>, Vec<(Vec<u8>, Vec<u8>, Vec<u8>)>>>>::new(),
+            buffer_size: ThreadLocal::<Cell<usize>>::new(),
         }
     }
 
@@ -103,38 +104,35 @@ impl<T: Trace> GraphNode<T> for OutputFastqFileOp {
 
             let tupled_record = (record.0.to_vec(), record.1.to_vec(), record.2.to_vec());
 
-            let mut locked_buffer = self.buffer.lock().unwrap();
-            let mut locked_buffer_size = self.buffer_size.lock().unwrap();
+            let mut local_buffer = self.buffer.get_or(|| Cell::new(HashMap::new())).take();
+            let local_buffer_size = self.buffer_size.get_or(|| Cell::new(0));
 
-            match locked_buffer.entry(file_name.to_vec()) {
-                Entry::Occupied(mut e) => {
-                    e.get_mut().push(tupled_record);
+            match local_buffer.entry(file_name.to_vec()) {
+                Entry::Occupied(e) => {
+                    e.into_mut().push(tupled_record);
                 }
                 Entry::Vacant(e) => {
                     e.insert(vec![tupled_record]);
                 }
             };
 
-            *locked_buffer_size += record_size(record);
+            local_buffer_size.set(local_buffer_size.get() + record_size(record));
 
-            if matches!(
-                locked_buffer_size.cmp(&MEGABYTE),
-                Ordering::Greater | Ordering::Equal
-            ) {
-                for fname in locked_buffer.keys() {
+            if local_buffer_size.get() <= MEGABYTE {
+                for fname in local_buffer.keys() {
                     let locked_writer = self.get_writer(&fname).map_err(|e| Error::FileIo {
                         file: utf8(&fname),
                         source: Box::new(e),
                     })?;
 
                     let mut writer = locked_writer.lock().unwrap();
-                    for (s, r, c) in locked_buffer.get(fname).unwrap() {
+                    for (s, r, c) in local_buffer.get(fname).unwrap() {
                         write_fastq_record(&mut *writer, (&s, &r, &c));
                     }
                 }
 
-                locked_buffer.clear();
-                *locked_buffer_size = 0;
+                local_buffer.clear();
+                local_buffer_size.set(0);
             }
         }
 
@@ -150,21 +148,23 @@ impl<T: Trace> GraphNode<T> for OutputFastqFileOp {
     }
 
     fn finish(&self) -> Result<bool> {
-        let mut locked_buffer = self.buffer.lock().unwrap();
-        for fname in locked_buffer.keys() {
+        let mut local_buffer = self.buffer.get_or(|| Cell::new(HashMap::new())).take();
+        let local_buffer_size = self.buffer_size.get_or(|| Cell::new(0));
+
+        for fname in local_buffer.keys() {
             let locked_writer = self.get_writer(&fname).map_err(|e| Error::FileIo {
                 file: utf8(&fname),
                 source: Box::new(e),
             })?;
 
             let mut writer = locked_writer.lock().unwrap();
-            for (s, r, c) in locked_buffer.get(fname).unwrap() {
+            for (s, r, c) in local_buffer.get(fname).unwrap() {
                 write_fastq_record(&mut *writer, (&s, &r, &c));
             }
         }
 
-        locked_buffer.clear();
-        *self.buffer_size.lock().unwrap() = 0;
+        local_buffer.clear();
+        local_buffer_size.set(0);
 
         Ok(true)
     }

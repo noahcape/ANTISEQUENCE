@@ -51,7 +51,11 @@ impl<T: Trace> Graph<T> {
 
     /// Run a graph until all reads processed.
     pub fn run(&self) -> Result<()> {
-        self.run_trace(DEFAULT_TRACE_PATH)
+        let res = self.run_trace(DEFAULT_TRACE_PATH);
+
+        self.drop_all();
+
+        res
     }
 
     /// Run a graph until all reads processed, outputting the trace to the specified path.
@@ -69,8 +73,6 @@ impl<T: Trace> Graph<T> {
                 break;
             }
         }
-
-        self.drop_all();
 
         Ok(())
     }
@@ -99,8 +101,12 @@ impl<T: Trace> Graph<T> {
         thread::scope(|s| {
             for _ in 0..threads {
                 s.spawn(|| {
-                    self.run_trace_inner(&trace)
-                        .unwrap_or_else(|e| panic!("{e}"))
+                    let res = self.run_trace_inner(&trace)
+                        .unwrap_or_else(|e| panic!("{e}"));
+
+                    self.drop_all();
+
+                    res
                 });
             }
         });
