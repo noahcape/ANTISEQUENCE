@@ -12,7 +12,7 @@ use flate2::{write::GzEncoder, Compression};
 
 use crate::graph::*;
 
-const MEGABYTE: usize = 32000;
+const MEGABYTE: usize = 1000000;
 
 pub struct OutputFastqFileOp {
     required_names: Vec<LabelOrAttr>,
