@@ -12,7 +12,7 @@ use flate2::{write::GzEncoder, Compression};
 
 use crate::graph::*;
 
-const MEGABYTE: usize = 1000000;
+const MEGABYTE: usize = 32000;
 
 pub struct OutputFastqFileOp {
     required_names: Vec<LabelOrAttr>,
@@ -118,7 +118,7 @@ impl<T: Trace> GraphNode<T> for OutputFastqFileOp {
 
             local_buffer_size.set(local_buffer_size.get() + record_size(record));
 
-            if local_buffer_size.get() <= MEGABYTE {
+            if local_buffer_size.get() >= MEGABYTE {
                 for fname in local_buffer.keys() {
                     let locked_writer = self.get_writer(&fname).map_err(|e| Error::FileIo {
                         file: utf8(&fname),
