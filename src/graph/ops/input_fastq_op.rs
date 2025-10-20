@@ -24,6 +24,26 @@ fn chunk_size() -> usize {
     })
 }
 
+fn skip_id() -> bool {
+    static SKIP: OnceLock<bool> = OnceLock::new();
+    *SKIP.get_or_init(|| {
+        std::env::var("ANTISEQ_SKIP_ID")
+            .ok()
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    })
+}
+
+fn skip_qual() -> bool {
+    static SKIP: OnceLock<bool> = OnceLock::new();
+    *SKIP.get_or_init(|| {
+        std::env::var("ANTISEQ_SKIP_QUAL")
+            .ok()
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    })
+}
+
 pub struct InputFastqOp<'reader> {
     readers: Vec<(Mutex<Box<dyn FastxReader + 'reader>>, Arc<Origin>)>,
     buf: ThreadLocal<RefCell<VecDeque<Read>>>,
@@ -176,11 +196,13 @@ impl<'reader, T: Trace> GraphNode<T> for InputFastqOp<'reader> {
                             idx: idx + i,
                             source: Box::new(e),
                         })?;
-                        curr_read.add_fastq(
+                        let name_opt = if skip_id() { None } else { Some(record.id()) };
+                        let qual_opt = if skip_qual() { None } else { record.qual() };
+                        curr_read.add_fastq_parts(
                             (i + 1) as _,
-                            record.id(),
+                            name_opt,
                             &record.seq(),
-                            record.qual().unwrap(),
+                            qual_opt,
                             Arc::clone(origin),
                             idx + i,
                         );
@@ -199,11 +221,13 @@ impl<'reader, T: Trace> GraphNode<T> for InputFastqOp<'reader> {
                             idx,
                             source: Box::new(e),
                         })?;
-                        curr_read.add_fastq(
+                        let name_opt = if skip_id() { None } else { Some(record.id()) };
+                        let qual_opt = if skip_qual() { None } else { record.qual() };
+                        curr_read.add_fastq_parts(
                             (i + 1) as _,
-                            record.id(),
+                            name_opt,
                             &record.seq(),
-                            record.qual().unwrap(),
+                            qual_opt,
                             Arc::clone(origin),
                             idx,
                         );

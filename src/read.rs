@@ -1,4 +1,5 @@
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
 use serde::Serialize;
 use serde_json;
@@ -44,7 +45,7 @@ pub struct Read {
 /// This is typically used to represent a name or sequence from a fastq record.
 #[derive(Debug, Clone)]
 pub struct StrMappings {
-    mappings: Vec<Mapping>,
+    mappings: SmallVec<[Mapping; 4]>,
     string: Vec<u8>,
     qual: Option<Vec<u8>>,
 
@@ -55,13 +56,13 @@ pub struct StrMappings {
 
 impl StrMappings {
     pub fn new(string: Vec<u8>, origin: Arc<Origin>, idx: usize) -> Self {
-        let mut mappings: Vec<Mapping> = Vec::with_capacity(4);
+        let mut mappings: SmallVec<[Mapping; 4]> = SmallVec::new();
         mappings.push(Mapping::new_default(string.len()));
         Self { mappings, string, qual: None, origin, idx }
     }
 
     pub fn new_with_qual(string: Vec<u8>, qual: Vec<u8>, origin: Arc<Origin>, idx: usize) -> Self {
-        let mut mappings: Vec<Mapping> = Vec::with_capacity(4);
+        let mut mappings: SmallVec<[Mapping; 4]> = SmallVec::new();
         mappings.push(Mapping::new_default(string.len()));
         Self { mappings, string, qual: Some(qual), origin, idx }
     }
@@ -479,6 +480,26 @@ impl Read {
         let seq = StrMappings::new_with_qual(seq.to_owned(), qual.to_owned(), origin, idx);
         self.str_mappings.push((StrType::Name(str_type_idx), name));
         self.str_mappings.push((StrType::Seq(str_type_idx), seq));
+    }
+
+    pub fn add_fastq_parts(
+        &mut self,
+        str_type_idx: u8,
+        name: Option<&[u8]>,
+        seq: &[u8],
+        qual: Option<&[u8]>,
+        origin: Arc<Origin>,
+        idx: usize,
+    ) {
+        if let Some(n) = name {
+            let name_sm = StrMappings::new(n.to_owned(), Arc::clone(&origin), idx);
+            self.str_mappings.push((StrType::Name(str_type_idx), name_sm));
+        }
+        let seq_sm = match qual {
+            Some(q) => StrMappings::new_with_qual(seq.to_owned(), q.to_owned(), origin, idx),
+            None => StrMappings::new(seq.to_owned(), origin, idx),
+        };
+        self.str_mappings.push((StrType::Seq(str_type_idx), seq_sm));
     }
 
     pub fn to_fastq(&self, str_type_idx: u8) -> Result<(&[u8], &[u8], &[u8]), NameError> {
