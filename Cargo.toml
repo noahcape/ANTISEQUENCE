@@ -25,3 +25,12 @@ parking_lot = "0.12"
 block-aligner = { version = "0.5", features = ["simd_avx2"] }
 [target.'cfg(target_arch = "aarch64")'.dependencies]
 block-aligner = { version = "0.5", features = ["simd_neon"] }
+
+[profile.bench]
+opt-level = 3
+codegen-units = 1
+lto = "thin"
+debug = false
+debug-assertions = false
+overflow-checks = false
+strip = false

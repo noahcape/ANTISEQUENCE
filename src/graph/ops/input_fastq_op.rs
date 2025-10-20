@@ -20,27 +20,7 @@ fn chunk_size() -> usize {
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
             .filter(|&v| v > 0)
-            .unwrap_or(256)
-    })
-}
-
-fn skip_id() -> bool {
-    static SKIP: OnceLock<bool> = OnceLock::new();
-    *SKIP.get_or_init(|| {
-        std::env::var("ANTISEQ_SKIP_ID")
-            .ok()
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-    })
-}
-
-fn skip_qual() -> bool {
-    static SKIP: OnceLock<bool> = OnceLock::new();
-    *SKIP.get_or_init(|| {
-        std::env::var("ANTISEQ_SKIP_QUAL")
-            .ok()
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
+            .unwrap_or(512)
     })
 }
 
@@ -196,8 +176,8 @@ impl<'reader, T: Trace> GraphNode<T> for InputFastqOp<'reader> {
                             idx: idx + i,
                             source: Box::new(e),
                         })?;
-                        let name_opt = if skip_id() { None } else { Some(record.id()) };
-                        let qual_opt = if skip_qual() { None } else { record.qual() };
+                        let name_opt = Some(record.id());
+                        let qual_opt = record.qual();
                         curr_read.add_fastq_parts(
                             (i + 1) as _,
                             name_opt,
@@ -221,8 +201,8 @@ impl<'reader, T: Trace> GraphNode<T> for InputFastqOp<'reader> {
                             idx,
                             source: Box::new(e),
                         })?;
-                        let name_opt = if skip_id() { None } else { Some(record.id()) };
-                        let qual_opt = if skip_qual() { None } else { record.qual() };
+                        let name_opt = Some(record.id());
+                        let qual_opt = record.qual();
                         curr_read.add_fastq_parts(
                             (i + 1) as _,
                             name_opt,

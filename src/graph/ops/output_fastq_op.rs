@@ -163,6 +163,7 @@ impl<'writer, T: Trace> GraphNode<T> for OutputFastqOp<'writer> {
     }
 }
 
+#[inline(always)]
 pub fn write_fastq_record(
     writer: &mut (dyn Write + std::marker::Send),
     record: (&[u8], &[u8], &[u8]),

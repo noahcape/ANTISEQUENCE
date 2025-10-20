@@ -115,7 +115,7 @@ impl<T: Trace> Graph<T> {
             }
 
             // Skip nodes whose requirements are not satisfied, unless trusted.
-            if !trust_required_checks() {
+            if !trust_required_checks() && !node.required_names().is_empty() {
                 if let Some(read) = &curr {
                     if !read.has_names(node.required_names()) {
                         continue;

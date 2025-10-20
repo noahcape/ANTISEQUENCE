@@ -315,7 +315,7 @@ pub struct Mapping {
     pub label: InlineString,
     pub start: usize,
     pub len: usize,
-    data: Option<FxHashMap<InlineString, Data>>,
+    data: Option<SmallAttrMap>,
 }
 
 /// Data types.
@@ -429,9 +429,84 @@ impl Mapping {
     pub fn data_mut(&mut self, attr: InlineString) -> &mut Data {
         self
             .data
-            .get_or_insert_with(FxHashMap::default)
+            .get_or_insert_with(SmallAttrMap::default)
+            .get_or_insert_default(attr)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct SmallAttrMap {
+    small: SmallVec<[(InlineString, Data); 4]>,
+    map: Option<FxHashMap<InlineString, Data>>,
+}
+
+impl Default for SmallAttrMap {
+    fn default() -> Self { Self { small: SmallVec::new(), map: None } }
+}
+
+impl SmallAttrMap {
+    fn len(&self) -> usize {
+        self.map.as_ref().map(|m| m.len()).unwrap_or(self.small.len())
+    }
+
+    fn clear(&mut self) {
+        self.small.clear();
+        if let Some(m) = &mut self.map { m.clear(); }
+    }
+
+    fn get(&self, attr: &InlineString) -> Option<&Data> {
+        if let Some(m) = &self.map { return m.get(attr); }
+        self.small.iter().find_map(|(k, v)| if k == attr { Some(v) } else { None })
+    }
+
+    fn get_or_insert_default(&mut self, attr: InlineString) -> &mut Data {
+        // If we already promoted to map, insert there via helper to avoid borrow conflicts.
+        if self.map.is_some() {
+            return self.entry_in_map(attr);
+        }
+
+        // Try to find in small via index to avoid overlapping borrows
+        let len_now = self.small.len();
+        for i in 0..len_now {
+            if self.small[i].0 == attr {
+                return &mut self.small[i].1;
+            }
+        }
+
+        // If room left inline, push
+        let inline_cap = self.small.inline_size();
+        if self.small.len() < inline_cap {
+            self.small.push((attr, Data::Bool(false)));
+            let idx = self.small.len() - 1;
+            return &mut self.small[idx].1;
+        }
+
+        // Promote to hashmap
+        let mut m: FxHashMap<InlineString, Data> = FxHashMap::default();
+        m.reserve(self.small.len() + 1);
+        for (k, v) in self.small.drain(..) {
+            m.insert(k, v);
+        }
+        self.map = Some(m);
+        // Now safely insert and return from the map
+        self.entry_in_map(attr)
+    }
+
+    fn for_each<F: FnMut(&InlineString, &Data)>(&self, mut f: F) {
+        if let Some(m) = &self.map {
+            for (k, v) in m.iter() { f(k, v); }
+        } else {
+            for (k, v) in self.small.iter() { f(k, v); }
+        }
+    }
+
+    #[inline(always)]
+    fn entry_in_map(&mut self, attr: InlineString) -> &mut Data {
+        self.map
+            .as_mut()
+            .unwrap()
             .entry(attr)
-            .or_insert_with(|| Data::Bool(false))
+            .or_insert(Data::Bool(false))
     }
 }
 
@@ -732,9 +807,9 @@ impl fmt::Display for StrMappings {
             }
 
             if let Some(data) = &m.data {
-                for (k, v) in data {
-                    write!(f, " {}={}", k.to_string().bold(), v)?;
-                }
+                data.for_each(|k, v| {
+                    let _ = write!(f, " {}={}", k.to_string().bold(), v);
+                });
             }
             writeln!(f)?;
         }
@@ -908,10 +983,11 @@ impl From<&Read> for SerializableRead {
                 let data = mapping
                     .data
                     .as_ref()
-                    .map(|m| m.iter()
-                        .map(|(attr, value)| (attr.to_string(), value.clone()))
-                        .collect::<FxHashMap<_, _>>()
-                    )
+                    .map(|m| {
+                        let mut out = FxHashMap::default();
+                        m.for_each(|attr, value| { out.insert(attr.to_string(), value.clone()); });
+                        out
+                    })
                     .unwrap_or_default();
                 let serializable_mapping = SerializableMapping {
                     string: std::str::from_utf8(str_mapping.substring(mapping))
