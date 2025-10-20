@@ -441,7 +441,7 @@ impl Mapping {
 impl Read {
     pub fn new() -> Self {
         Self {
-            str_mappings: Vec::new(),
+            str_mappings: Vec::with_capacity(4),
         }
     }
 

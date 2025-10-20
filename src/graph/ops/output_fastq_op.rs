@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Write, IoSlice};
 use std::sync::{Arc, Mutex};
 
 use rustc_hash::FxHashMap;
@@ -59,12 +59,10 @@ impl OutputFastqFileOp {
                 }
 
                 let writer: Arc<Mutex<dyn Write + Send>> = if file_path.ends_with(".gz") {
-                    Arc::new(Mutex::new(BufWriter::new(GzEncoder::new(
-                        File::create(file_path)?,
-                        Compression::default(),
-                    ))))
+                    let gz = GzEncoder::new(File::create(file_path)?, Compression::default());
+                    Arc::new(Mutex::new(BufWriter::with_capacity(1 << 20, gz)))
                 } else {
-                    Arc::new(Mutex::new(BufWriter::new(File::create(file_path)?)))
+                    Arc::new(Mutex::new(BufWriter::with_capacity(1 << 20, File::create(file_path)?)))
                 };
 
                 Ok(Arc::clone(e.insert(writer)))
@@ -168,11 +166,43 @@ pub fn write_fastq_record(
     writer: &mut (dyn Write + std::marker::Send),
     record: (&[u8], &[u8], &[u8]),
 ) {
-    writer.write_all(b"@").unwrap();
-    writer.write_all(&record.0).unwrap();
-    writer.write_all(b"\n").unwrap();
-    writer.write_all(&record.1).unwrap();
-    writer.write_all(b"\n+\n").unwrap();
-    writer.write_all(&record.2).unwrap();
-    writer.write_all(b"\n").unwrap();
+    let (name, seq, qual) = record;
+
+    let mut parts = [
+        IoSlice::new(b"@" as &[u8]),
+        IoSlice::new(name),
+        IoSlice::new(b"\n" as &[u8]),
+        IoSlice::new(seq),
+        IoSlice::new(b"\n+\n" as &[u8]),
+        IoSlice::new(qual),
+        IoSlice::new(b"\n" as &[u8]),
+    ];
+
+    let total: usize = parts.iter().map(|p| p.len()).sum();
+    let n = writer.write_vectored(&parts).unwrap();
+    if n == total {
+        return;
+    }
+    if n == 0 {
+        // Fallback to ensure forward progress
+        for p in &parts {
+            writer.write_all(p.as_ref()).unwrap();
+        }
+        return;
+    }
+
+    // Write remaining bytes sequentially
+    let mut remaining = n;
+    for (idx, p) in parts.iter().enumerate() {
+        let s = p.as_ref();
+        if remaining < s.len() {
+            writer.write_all(&s[remaining..]).unwrap();
+            for k in idx + 1..parts.len() {
+                writer.write_all(parts[k].as_ref()).unwrap();
+            }
+            return;
+        } else {
+            remaining -= s.len();
+        }
+    }
 }
