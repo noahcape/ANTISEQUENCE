@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Write, IoSlice};
 use std::sync::Arc;
 use parking_lot::Mutex;
 
@@ -168,11 +168,69 @@ pub fn write_fastq_record(
     writer: &mut (dyn Write + std::marker::Send),
     record: (&[u8], &[u8], &[u8]),
 ) {
-    writer.write_all(b"@").unwrap();
-    writer.write_all(&record.0).unwrap();
-    writer.write_all(b"\n").unwrap();
-    writer.write_all(&record.1).unwrap();
-    writer.write_all(b"\n+\n").unwrap();
-    writer.write_all(&record.2).unwrap();
-    writer.write_all(b"\n").unwrap();
+    let (name, seq, qual) = record;
+    let segs: [&[u8]; 7] = [b"@", name, b"\n", seq, b"\n+\n", qual, b"\n"];
+    let total = 1 + name.len() + 1 + seq.len() + 3 + qual.len() + 1;
+
+    let mut idx = 0usize; // current segment
+    let mut off = 0usize; // offset into current segment
+    let mut written = 0usize;
+
+    while written < total {
+        // Build IoSlices for remaining segments
+        let mut buf: [IoSlice; 7] = [
+            IoSlice::new(b""),
+            IoSlice::new(b""),
+            IoSlice::new(b""),
+            IoSlice::new(b""),
+            IoSlice::new(b""),
+            IoSlice::new(b""),
+            IoSlice::new(b""),
+        ];
+        let mut n = 0usize;
+        let mut j = idx;
+        while j < segs.len() {
+            let s = segs[j];
+            let slice = if j == idx { &s[off..] } else { s };
+            if !slice.is_empty() {
+                buf[n] = IoSlice::new(slice);
+                n += 1;
+            }
+            j += 1;
+        }
+
+        match writer.write_vectored(&buf[..n]) {
+            Ok(0) => {
+                // Fallback: write some from current segment
+                if idx >= segs.len() { break; }
+                let first = &segs[idx][off..];
+                if !first.is_empty() {
+                    let nw = writer.write(first).unwrap();
+                    if nw == 0 { continue; }
+                    written += nw;
+                    off += nw;
+                    if off == segs[idx].len() { idx += 1; off = 0; }
+                } else {
+                    idx += 1; off = 0;
+                }
+            }
+            Ok(nw) => {
+                written += nw;
+                let mut rem = nw;
+                while rem > 0 {
+                    let remain_in_cur = segs[idx].len() - off;
+                    if rem < remain_in_cur {
+                        off += rem;
+                        rem = 0;
+                    } else {
+                        rem -= remain_in_cur;
+                        idx += 1;
+                        off = 0;
+                    }
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => panic!("{}", e),
+        }
+    }
 }
