@@ -808,11 +808,11 @@ impl fmt::Display for StrMappings {
 
         for m in &self.mappings {
             let curr = if m.len == 0 {
-                let mut c = vec![b' '; self.string.len() + 1];
+                let mut c = vec![b' '; self.string().len() + 1];
                 c[m.start] = b'.';
                 String::from_utf8(c).unwrap()
             } else {
-                let mut c = vec![b' '; self.string.len() + 1];
+                let mut c = vec![b' '; self.string().len() + 1];
                 c[m.start..m.start + m.len].fill(b'-');
                 c[m.start] = b'|';
                 c[m.start + m.len - 1] = b'|';
@@ -843,15 +843,15 @@ impl fmt::Display for StrMappings {
             f,
             " {: <len$} {}",
             "str:".bold().green(),
-            std::str::from_utf8(&self.string).unwrap().green()
+            std::str::from_utf8(self.string()).unwrap().green()
         )?;
 
-        if let Some(qual) = &self.qual {
+        if let Some(qual) = self.qual() {
             writeln!(
                 f,
                 " {: <len$} {}",
                 "qual:".bold().green(),
-                std::str::from_utf8(&qual).unwrap().green()
+                std::str::from_utf8(qual).unwrap().green()
             )?;
         }
 
