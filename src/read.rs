@@ -55,23 +55,15 @@ pub struct StrMappings {
 
 impl StrMappings {
     pub fn new(string: Vec<u8>, origin: Arc<Origin>, idx: usize) -> Self {
-        Self {
-            mappings: vec![Mapping::new_default(string.len())],
-            string,
-            qual: None,
-            origin,
-            idx,
-        }
+        let mut mappings: Vec<Mapping> = Vec::with_capacity(4);
+        mappings.push(Mapping::new_default(string.len()));
+        Self { mappings, string, qual: None, origin, idx }
     }
 
     pub fn new_with_qual(string: Vec<u8>, qual: Vec<u8>, origin: Arc<Origin>, idx: usize) -> Self {
-        Self {
-            mappings: vec![Mapping::new_default(string.len())],
-            string,
-            qual: Some(qual),
-            origin,
-            idx,
-        }
+        let mut mappings: Vec<Mapping> = Vec::with_capacity(4);
+        mappings.push(Mapping::new_default(string.len()));
+        Self { mappings, string, qual: Some(qual), origin, idx }
     }
 
     pub fn data(&self, label: InlineString, attr: InlineString) -> Option<&Data> {
@@ -98,7 +90,7 @@ impl StrMappings {
         if let Some(m) = self.mapping_mut(label) {
             m.start = start;
             m.len = len;
-            m.data.clear();
+            if let Some(d) = m.data.as_mut() { d.clear(); }
         } else {
             self.mappings.push(Mapping::new(label, start, len));
         }
@@ -322,7 +314,7 @@ pub struct Mapping {
     pub label: InlineString,
     pub start: usize,
     pub len: usize,
-    data: FxHashMap<InlineString, Data>,
+    data: Option<FxHashMap<InlineString, Data>>,
 }
 
 /// Data types.
@@ -352,7 +344,7 @@ impl Mapping {
             label: InlineString::new(b"*"),
             start: 0,
             len,
-            data: FxHashMap::default(),
+            data: None,
         }
     }
 
@@ -361,7 +353,7 @@ impl Mapping {
             label,
             start,
             len,
-            data: FxHashMap::default(),
+            data: None,
         }
     }
 
@@ -430,21 +422,25 @@ impl Mapping {
     }
 
     pub fn data(&self, attr: InlineString) -> Option<&Data> {
-        self.data.get(&attr)
+        self.data.as_ref().and_then(|m| m.get(&attr))
     }
 
     pub fn data_mut(&mut self, attr: InlineString) -> &mut Data {
-        self.data.entry(attr).or_insert_with(|| Data::Bool(false))
+        self
+            .data
+            .get_or_insert_with(FxHashMap::default)
+            .entry(attr)
+            .or_insert_with(|| Data::Bool(false))
     }
 }
 
 impl Read {
+    #[inline(always)]
     pub fn new() -> Self {
-        Self {
-            str_mappings: Vec::with_capacity(4),
-        }
+        Self { str_mappings: Vec::with_capacity(4) }
     }
 
+    #[inline(always)]
     pub fn has_names(&self, names: &[crate::expr::LabelOrAttr]) -> bool {
         for name in names {
             match name {
@@ -714,8 +710,10 @@ impl fmt::Display for StrMappings {
                 write!(f, " {: <len$} {}", m.label.to_string().bold(), curr)?;
             }
 
-            for (k, v) in &m.data {
-                write!(f, " {}={}", k.to_string().bold(), v)?;
+            if let Some(data) = &m.data {
+                for (k, v) in data {
+                    write!(f, " {}={}", k.to_string().bold(), v)?;
+                }
             }
             writeln!(f)?;
         }
@@ -888,9 +886,12 @@ impl From<&Read> for SerializableRead {
 
                 let data = mapping
                     .data
-                    .iter()
-                    .map(|(attr, value)| (attr.to_string(), value.clone()))
-                    .collect::<FxHashMap<_, _>>();
+                    .as_ref()
+                    .map(|m| m.iter()
+                        .map(|(attr, value)| (attr.to_string(), value.clone()))
+                        .collect::<FxHashMap<_, _>>()
+                    )
+                    .unwrap_or_default();
                 let serializable_mapping = SerializableMapping {
                     string: std::str::from_utf8(str_mapping.substring(mapping))
                         .unwrap()

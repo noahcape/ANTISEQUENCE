@@ -3,6 +3,7 @@ use std::ops::RangeBounds;
 use std::path::Path;
 use std::sync::Arc;
 use std::thread;
+use std::sync::OnceLock;
 
 use crate::errors::*;
 use crate::expr::*;
@@ -104,21 +105,30 @@ impl<T: Trace> Graph<T> {
     /// the the operation is skipped.
     pub fn run_one(&self, mut curr: Option<Read>, trace: &T) -> Result<(Option<Read>, bool)> {
         for node in &self.nodes {
-            if let Some(read) = &curr {
-                if !read.has_names(node.required_names()) {
-                    continue;
+            // If there is no current read, only the input node can produce one.
+            if curr.is_none() {
+                let (c, done) = node.run(None, trace)?;
+                curr = c;
+                if done { return Ok((curr, done)); }
+                if curr.is_none() { break; }
+                continue;
+            }
+
+            // Skip nodes whose requirements are not satisfied, unless trusted.
+            if !trust_required_checks() {
+                if let Some(read) = &curr {
+                    if !read.has_names(node.required_names()) {
+                        continue;
+                    }
                 }
             }
 
+            // Call node.run so nodes that override run (and not run_inner) still work.
             let (c, done) = node.run(curr, trace)?;
             curr = c;
 
-            if done {
-                return Ok((curr, done));
-            }
-            if curr.is_none() {
-                break;
-            }
+            if done { return Ok((curr, done)); }
+            if curr.is_none() { break; }
         }
 
         Ok((curr, false))
@@ -154,6 +164,17 @@ impl<T: Trace> Graph<T> {
 
         Ok((curr, false, false))
     }
+}
+
+#[inline(always)]
+fn trust_required_checks() -> bool {
+    static TRUST: OnceLock<bool> = OnceLock::new();
+    *TRUST.get_or_init(|| {
+        std::env::var("ANTISEQ_TRUST_NAMES")
+            .ok()
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    })
 }
 
 pub use MatchType::*;

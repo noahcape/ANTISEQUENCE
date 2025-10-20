@@ -5,13 +5,24 @@ use thread_local::*;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 use crate::errors::*;
 use crate::expr::LabelOrAttr;
 use crate::graph::*;
+use std::sync::OnceLock;
 
-const CHUNK_SIZE: usize = 256;
+fn chunk_size() -> usize {
+    static CHUNK: OnceLock<usize> = OnceLock::new();
+    *CHUNK.get_or_init(|| {
+        std::env::var("ANTISEQ_CHUNK_SIZE")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|&v| v > 0)
+            .unwrap_or(256)
+    })
+}
 
 pub struct InputFastqOp<'reader> {
     readers: Vec<(Mutex<Box<dyn FastxReader + 'reader>>, Arc<Origin>)>,
@@ -131,19 +142,21 @@ impl<'reader, T: Trace> GraphNode<T> for InputFastqOp<'reader> {
         let start = trace.start(&read);
         assert!(read.is_none(), "Expected no input reads for {}", Self::NAME);
 
+        let cs = chunk_size();
         let buf = self
             .buf
-            .get_or(|| RefCell::new(VecDeque::with_capacity(CHUNK_SIZE)));
+            .get_or(|| RefCell::new(VecDeque::with_capacity(cs)));
         let mut b = buf.borrow_mut();
 
         if b.is_empty() {
+            // Lock readers once per refill to amortize lock overhead
             let mut locked_readers = self
                 .readers
                 .iter()
-                .map(|(r, o)| (r.lock().unwrap(), o))
+                .map(|(r, o)| (r.lock(), o))
                 .collect::<Vec<_>>();
 
-            'outer: for _ in 0..CHUNK_SIZE {
+            'outer: for _ in 0..cs {
                 let idx = self.idx.fetch_add(self.interleaved, Ordering::Relaxed);
                 let mut curr_read = Read::new();
 
