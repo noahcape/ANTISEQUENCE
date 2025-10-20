@@ -55,35 +55,42 @@ pub struct StrMappings {
 }
 
 impl StrMappings {
+    #[inline(always)]
     pub fn new(string: Vec<u8>, origin: Arc<Origin>, idx: usize) -> Self {
         let mut mappings: SmallVec<[Mapping; 4]> = SmallVec::new();
         mappings.push(Mapping::new_default(string.len()));
         Self { mappings, string, qual: None, origin, idx }
     }
 
+    #[inline(always)]
     pub fn new_with_qual(string: Vec<u8>, qual: Vec<u8>, origin: Arc<Origin>, idx: usize) -> Self {
         let mut mappings: SmallVec<[Mapping; 4]> = SmallVec::new();
         mappings.push(Mapping::new_default(string.len()));
         Self { mappings, string, qual: Some(qual), origin, idx }
     }
 
+    #[inline(always)]
     pub fn data(&self, label: InlineString, attr: InlineString) -> Option<&Data> {
         self.mapping(label).and_then(|m| m.data(attr))
     }
 
+    #[inline(always)]
     pub fn data_mut(&mut self, label: InlineString, attr: InlineString) -> Option<&mut Data> {
         self.mapping_mut(label).map(|m| m.data_mut(attr))
     }
 
+    #[inline(always)]
     pub fn mapping(&self, label: InlineString) -> Option<&Mapping> {
         // iterate in reverse since recently added labels likely to be at the end
         self.mappings.iter().rev().find(|m| m.label == label)
     }
 
+    #[inline(always)]
     pub fn mapping_mut(&mut self, label: InlineString) -> Option<&mut Mapping> {
         self.mappings.iter_mut().rev().find(|m| m.label == label)
     }
 
+    #[inline(always)]
     pub fn add_mapping(&mut self, label: Option<InlineString>, start: usize, len: usize) {
         let Some(label) = label else {
             return;
@@ -97,18 +104,22 @@ impl StrMappings {
         }
     }
 
+    #[inline(always)]
     pub fn string(&self) -> &[u8] {
         &self.string
     }
 
+    #[inline(always)]
     pub fn qual(&self) -> Option<&[u8]> {
         self.qual.as_ref().map(|q| q.as_slice())
     }
 
+    #[inline(always)]
     pub fn substring(&self, mapping: &Mapping) -> &[u8] {
         &self.string[mapping.start..mapping.start + mapping.len]
     }
 
+    #[inline(always)]
     pub fn substring_qual(&self, mapping: &Mapping) -> Option<&[u8]> {
         self.qual
             .as_ref()
@@ -340,6 +351,7 @@ pub enum Intersection {
 }
 
 impl Mapping {
+    #[inline(always)]
     pub fn new_default(len: usize) -> Self {
         Self {
             label: InlineString::new(b"*"),
@@ -349,6 +361,7 @@ impl Mapping {
         }
     }
 
+    #[inline(always)]
     pub fn new(label: InlineString, start: usize, len: usize) -> Self {
         Self {
             label,
@@ -358,6 +371,7 @@ impl Mapping {
         }
     }
 
+    #[inline(always)]
     pub fn intersect(&self, b: &Self) -> Intersection {
         let a_start = self.start;
         let a_end = self.start + self.len;
@@ -396,6 +410,7 @@ impl Mapping {
         }
     }
 
+    #[inline(always)]
     pub fn intersection_interval(&self, b: &Self) -> Option<(usize, usize)> {
         let a_start = self.start;
         let a_end = self.start + self.len;
@@ -411,6 +426,7 @@ impl Mapping {
         }
     }
 
+    #[inline(always)]
     pub fn union_interval(&self, b: &Self) -> (usize, usize) {
         let a_start = self.start;
         let a_end = self.start + self.len;
@@ -422,10 +438,12 @@ impl Mapping {
         (start, len)
     }
 
+    #[inline(always)]
     pub fn data(&self, attr: InlineString) -> Option<&Data> {
         self.data.as_ref().and_then(|m| m.get(&attr))
     }
 
+    #[inline(always)]
     pub fn data_mut(&mut self, attr: InlineString) -> &mut Data {
         self
             .data
@@ -577,6 +595,7 @@ impl Read {
         self.str_mappings.push((StrType::Seq(str_type_idx), seq_sm));
     }
 
+    #[inline(always)]
     pub fn to_fastq(&self, str_type_idx: u8) -> Result<(&[u8], &[u8], &[u8]), NameError> {
         let name = self
             .str_mappings(StrType::Name(str_type_idx))
@@ -589,18 +608,21 @@ impl Read {
         serde_json::to_string(&SerializableRead::from(self)).unwrap()
     }
 
+    #[inline(always)]
     pub fn str_mappings(&self, str_type: StrType) -> Option<&StrMappings> {
         self.str_mappings
             .iter()
             .find_map(|(t, m)| if *t == str_type { Some(m) } else { None })
     }
 
+    #[inline(always)]
     pub fn str_mappings_mut(&mut self, str_type: StrType) -> Option<&mut StrMappings> {
         self.str_mappings
             .iter_mut()
             .find_map(|(t, m)| if *t == str_type { Some(m) } else { None })
     }
 
+    #[inline(always)]
     pub fn mapping(&self, str_type: StrType, label: InlineString) -> Result<&Mapping, NameError> {
         self.str_mappings(str_type)
             .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?
@@ -608,6 +630,7 @@ impl Read {
             .ok_or_else(|| NameError::NotInRead(Name::Label(label)))
     }
 
+    #[inline(always)]
     pub fn mapping_mut(
         &mut self,
         str_type: StrType,
@@ -647,6 +670,7 @@ impl Read {
             .data_mut(attr))
     }
 
+    #[inline(always)]
     pub fn substring(&self, str_type: StrType, label: InlineString) -> Result<&[u8], NameError> {
         let str_mappings = self
             .str_mappings(str_type)
@@ -657,6 +681,7 @@ impl Read {
         Ok(str_mappings.substring(mapping))
     }
 
+    #[inline(always)]
     pub fn substring_qual(
         &self,
         str_type: StrType,
