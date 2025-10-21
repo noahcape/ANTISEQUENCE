@@ -1036,3 +1036,14 @@ impl From<&Read> for SerializableRead {
         Self(str_mappings)
     }
 }
+
+#[cfg(test)]
+mod size_tests {
+    use super::Read;
+
+    #[test]
+    fn read_size_guard() {
+        let sz = std::mem::size_of::<Read>();
+        assert!(sz <= 128, "Read is too large: {} bytes", sz);
+    }
+}

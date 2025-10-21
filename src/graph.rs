@@ -19,6 +19,7 @@ pub struct Graph<T: Trace = NoTrace> {
 }
 
 pub trait GraphNode<T: Trace = NoTrace>: Send + Sync {
+    #[inline(always)]
     fn run(&self, read: Option<Read>, trace: &T) -> Result<(Option<Read>, bool)> {
         let start = trace.start(&read);
         let Some(read) = read else {
@@ -103,7 +104,9 @@ impl<T: Trace> Graph<T> {
     /// Returns an additional boolean indicating whether the graph is done executing.
     /// If the required label or attribute names for an operation are not available,
     /// the the operation is skipped.
+    #[inline(always)]
     pub fn run_one(&self, mut curr: Option<Read>, trace: &T) -> Result<(Option<Read>, bool)> {
+        let trust = trust_required_checks();
         for node in &self.nodes {
             // If there is no current read, only the input node can produce one.
             if curr.is_none() {
@@ -115,7 +118,7 @@ impl<T: Trace> Graph<T> {
             }
 
             // Skip nodes whose requirements are not satisfied, unless trusted.
-            if !trust_required_checks() && !node.required_names().is_empty() {
+            if !trust && !node.required_names().is_empty() {
                 if let Some(read) = &curr {
                     if !read.has_names(node.required_names()) {
                         continue;
