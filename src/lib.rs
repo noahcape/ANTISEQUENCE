@@ -86,6 +86,19 @@
 //! If this is not desired, then break up the expression by storing intermediate results as
 //! attributes, which will always have the same value (not substituted by quality scores).
 
+// Optional global allocator selection
+cfg_if::cfg_if! {
+    if #[cfg(feature = "mimalloc")] {
+        use mimalloc::MiMalloc;
+        #[global_allocator]
+        static GLOBAL: MiMalloc = MiMalloc;
+    } else if #[cfg(feature = "jemalloc")] {
+        use jemallocator::Jemalloc;
+        #[global_allocator]
+        static GLOBAL: Jemalloc = Jemalloc;
+    }
+}
+
 pub mod errors;
 pub mod expr;
 pub mod graph;

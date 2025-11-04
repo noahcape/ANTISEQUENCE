@@ -668,13 +668,20 @@ impl ExprNode for ConcatAllNode {
         read: &'a Read,
         use_qual: bool,
     ) -> std::result::Result<EvalData<'a>, NameError> {
-        let mut res = Vec::new();
-
+        // Collect parts first to compute total size and pre-allocate once
+        let mut parts: Vec<Cow<'a, [u8]>> = Vec::with_capacity(self.nodes.len());
+        let mut total_len = 0usize;
         for node in &self.nodes {
             let b = node.eval(read, use_qual)?;
-            res.extend_from_slice(&expect_bytes(b)?);
+            let bytes = expect_bytes(b)?;
+            total_len += bytes.len();
+            parts.push(bytes);
         }
 
+        let mut res = Vec::with_capacity(total_len);
+        for p in parts {
+            res.extend_from_slice(&p);
+        }
         Ok(EvalData::Bytes(Cow::Owned(res)))
     }
 

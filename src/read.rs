@@ -258,14 +258,152 @@ impl StrMappings {
             }
         });
 
-        self.string
-            .splice(prev.start..prev.start + prev.len, new_str.iter().cloned());
+        // In-place replacement of bytes in self.string, minimizing reallocations.
+        let start = prev.start;
+        let old_len = prev.len;
+        let new_len = new_str.len();
+        // If new_str may alias self.string's buffer, copy into an owned temporary first to avoid UB
+        let src_bytes: std::borrow::Cow<[u8]> = {
+            let pr = self.string.as_ptr_range();
+            let p = new_str.as_ptr();
+            if p >= pr.start && p < pr.end {
+                std::borrow::Cow::Owned(new_str.to_vec())
+            } else {
+                std::borrow::Cow::Borrowed(new_str)
+            }
+        };
 
-        if let Some(qual) = &mut self.qual {
-            qual.splice(
-                prev.start..prev.start + prev.len,
-                new_qual.unwrap().iter().cloned(),
-            );
+        if new_len == old_len {
+            if new_len != 0 {
+                unsafe {
+                    std::ptr::copy(
+                        src_bytes.as_ref().as_ptr(),
+                        self.string.as_mut_ptr().add(start),
+                        new_len,
+                    );
+                }
+            }
+        } else if new_len < old_len {
+            // write new bytes, then shift tail left and truncate
+            if new_len != 0 {
+                unsafe {
+                    std::ptr::copy(
+                        src_bytes.as_ref().as_ptr(),
+                        self.string.as_mut_ptr().add(start),
+                        new_len,
+                    );
+                }
+            }
+            let tail_src = start + old_len;
+            let tail_dst = start + new_len;
+            let tail_len = self.string.len() - tail_src;
+            if tail_len > 0 {
+                unsafe {
+                    let base = self.string.as_mut_ptr();
+                    std::ptr::copy(base.add(tail_src), base.add(tail_dst), tail_len);
+                }
+            }
+            self.string.truncate(self.string.len() - (old_len - new_len));
+        } else {
+            // grow: make room by moving tail right, then write new bytes
+            let diff = new_len - old_len;
+            let tail_src = start + old_len;
+            let tail_len = self.string.len() - tail_src;
+            let orig_len = self.string.len();
+            self.string.reserve(diff);
+            self.string.resize(orig_len + diff, 0);
+            if tail_len > 0 {
+                unsafe {
+                    let base = self.string.as_mut_ptr();
+                    std::ptr::copy(
+                        base.add(tail_src),
+                        base.add(tail_src + diff),
+                        tail_len,
+                    );
+                }
+            }
+            if new_len != 0 {
+                unsafe {
+                    std::ptr::copy(
+                        src_bytes.as_ref().as_ptr(),
+                        self.string.as_mut_ptr().add(start),
+                        new_len,
+                    );
+                }
+            }
+        }
+
+        if let Some(qual_vec) = &mut self.qual {
+            let qsrc = new_qual.expect("quality must be provided when qual is present");
+            let q_new_len = qsrc.len();
+            // alias check w.r.t qual buffer
+            let q_bytes: std::borrow::Cow<[u8]> = {
+                let pr = qual_vec.as_ptr_range();
+                let p = qsrc.as_ptr();
+                if p >= pr.start && p < pr.end {
+                    std::borrow::Cow::Owned(qsrc.to_vec())
+                } else {
+                    std::borrow::Cow::Borrowed(qsrc)
+                }
+            };
+
+            if q_new_len == old_len {
+                if q_new_len != 0 {
+                    unsafe {
+                        std::ptr::copy(
+                            q_bytes.as_ref().as_ptr(),
+                            qual_vec.as_mut_ptr().add(start),
+                            q_new_len,
+                        );
+                    }
+                }
+            } else if q_new_len < old_len {
+                if q_new_len != 0 {
+                    unsafe {
+                        std::ptr::copy(
+                            q_bytes.as_ref().as_ptr(),
+                            qual_vec.as_mut_ptr().add(start),
+                            q_new_len,
+                        );
+                    }
+                }
+                let tail_src = start + old_len;
+                let tail_dst = start + q_new_len;
+                let tail_len = qual_vec.len() - tail_src;
+                if tail_len > 0 {
+                    unsafe {
+                        let base = qual_vec.as_mut_ptr();
+                        std::ptr::copy(base.add(tail_src), base.add(tail_dst), tail_len);
+                    }
+                }
+                qual_vec.truncate(qual_vec.len() - (old_len - q_new_len));
+            } else {
+                let diff = q_new_len - old_len;
+                let tail_src = start + old_len;
+                let tail_len = qual_vec.len() - tail_src;
+                let orig_len = qual_vec.len();
+                qual_vec.reserve(diff);
+                qual_vec.resize(orig_len + diff, 0);
+                if tail_len > 0 {
+                    unsafe {
+                        let base = qual_vec.as_mut_ptr();
+                        std::ptr::copy(
+                            base.add(tail_src),
+                            base.add(tail_src + diff),
+                            tail_len,
+                        );
+                    }
+                }
+                if q_new_len != 0 {
+                    unsafe {
+                        std::ptr::copy(
+                            q_bytes.as_ref().as_ptr(),
+                            qual_vec.as_mut_ptr().add(start),
+                            q_new_len,
+                        );
+                    }
+                }
+            }
         }
 
         Ok(())
@@ -304,11 +442,28 @@ impl StrMappings {
             }
         });
 
-        self.string
-            .drain(trimmed.start..trimmed.start + trimmed.len);
+        // In-place remove [start, start+len) from string and qual with memmove + truncate
+        let start = trimmed.start;
+        let len = trimmed.len;
+        let tail_src = start + len;
+        let tail_len = self.string.len() - tail_src;
+        if tail_len > 0 {
+            unsafe {
+                let base = self.string.as_mut_ptr();
+                std::ptr::copy(base.add(tail_src), base.add(start), tail_len);
+            }
+        }
+        self.string.truncate(self.string.len() - len);
 
-        if let Some(qual) = &mut self.qual {
-            qual.drain(trimmed.start..trimmed.start + trimmed.len);
+        if let Some(qual_vec) = &mut self.qual {
+            let tail_len_q = qual_vec.len() - tail_src;
+            if tail_len_q > 0 {
+                unsafe {
+                    let base = qual_vec.as_mut_ptr();
+                    std::ptr::copy(base.add(tail_src), base.add(start), tail_len_q);
+                }
+            }
+            qual_vec.truncate(qual_vec.len() - len);
         }
 
         Ok(())

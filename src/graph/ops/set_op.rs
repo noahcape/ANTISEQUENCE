@@ -23,7 +23,8 @@ impl SetOp {
     /// for any shortening or lengthening.
     pub fn new(label_or_attr: impl Into<LabelOrAttr>, expr: impl Into<Expr>) -> Self {
         let label_or_attr = label_or_attr.into();
-        let expr = expr.into();
+        let mut expr = expr.into();
+        expr.optimize();
         let mut required_names = expr.required_names();
         if let LabelOrAttr::Label(_) = label_or_attr {
             required_names.push(label_or_attr.clone());
