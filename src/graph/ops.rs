@@ -48,6 +48,9 @@ pub use input_fastq_op::*;
 mod output_fastq_op;
 pub use output_fastq_op::*;
 
+mod null_output_op;
+pub use null_output_op::*;
+
 mod output_json_op;
 pub use output_json_op::*;
 

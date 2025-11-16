@@ -139,10 +139,17 @@ impl OutputFastqFileOp {
     }
 
     fn get_cached_writer(&self, file_name: &[u8]) -> std::io::Result<Arc<Mutex<dyn Write + Send>>> {
-        if writer_tls_disabled() { return self.get_writer(file_name); }
+        // if TLS is disabled, just create a new writer
+        if writer_tls_disabled() { 
+            return self.get_writer(file_name); 
+        }
+        // otherwise, try to get the writer from TLS
         if let Some(w) = OUTPUT_TLS.with(|m| m.borrow().writers.get(file_name).map(Arc::clone)) { return Ok(w); }
+        // if not found, create a new writer and cache it
         let w = self.get_writer(file_name)?; 
-        OUTPUT_TLS.with(|m| { m.borrow_mut().writers.insert(file_name.to_vec(), Arc::clone(&w)); });
+        OUTPUT_TLS.with(|m| { 
+            m.borrow_mut().writers.insert(file_name.to_vec(), Arc::clone(&w)); 
+        });
         Ok(w)
     }
 }
