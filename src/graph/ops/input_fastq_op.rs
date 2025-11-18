@@ -20,7 +20,7 @@ fn chunk_size() -> usize {
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
             .filter(|&v| v > 0)
-            .unwrap_or(512)
+            .unwrap_or(1024)
     })
 }
 
