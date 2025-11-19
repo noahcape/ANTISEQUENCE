@@ -35,31 +35,33 @@ impl MatchPolyXOp {
 }
 
 impl<T: Trace> GraphNode<T> for MatchPolyXOp {
-    fn run_inner(&self, mut read: Read) -> Result<(Option<Read>, bool)> {
-        let string = read
-            .substring(self.label.str_type, self.label.label)
-            .map_err(|e| Error::NameError {
-                source: e,
-                read: read.clone(),
-                context: Self::NAME,
-            })?;
+    fn run_inner(&self, mut reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
+        for read in &mut reads {
+            let string = read
+                .substring(self.label.str_type, self.label.label)
+                .map_err(|e| Error::NameError {
+                    source: e,
+                    read: read.clone(),
+                    context: Self::NAME,
+                })?;
 
-        if let Some(cut_idx) = match_polyx(string, self.x, self.end, self.identity) {
-            read.cut(
-                self.label.str_type,
-                self.label.label,
-                self.new_label1.as_ref().map(|l| l.label),
-                self.new_label2.as_ref().map(|l| l.label),
-                cut_idx,
-            )
-            .map_err(|e| Error::NameError {
-                source: e,
-                read: read.clone(),
-                context: Self::NAME,
-            })?;
+            if let Some(cut_idx) = match_polyx(string, self.x, self.end, self.identity) {
+                read.cut(
+                    self.label.str_type,
+                    self.label.label,
+                    self.new_label1.as_ref().map(|l| l.label),
+                    self.new_label2.as_ref().map(|l| l.label),
+                    cut_idx,
+                )
+                .map_err(|e| Error::NameError {
+                    source: e,
+                    read: read.clone(),
+                    context: Self::NAME,
+                })?;
+            }
         }
 
-        Ok((Some(read), false))
+        Ok((Some(reads), false))
     }
 
     fn required_names(&self) -> &[LabelOrAttr] {

@@ -15,15 +15,15 @@ impl<T: Trace> ForkOp<T> {
 }
 
 impl<T: Trace> GraphNode<T> for ForkOp<T> {
-    fn run(&self, read: Option<Read>, trace: &T) -> Result<(Option<Read>, bool)> {
-        let start = trace.start(&read);
-        let Some(read) = read else {
-            panic!("Expected some read!")
+    fn run(&self, reads: Option<Vec<Read>>, trace: &T) -> Result<(Option<Vec<Read>>, bool)> {
+        let start = trace.start(&reads);
+        let Some(reads) = reads else {
+            panic!("Expected some reads!")
         };
-        self.graph.run_one(Some(read.clone()), trace)?;
-        let read = Some(read);
-        trace.add(self.name(), start, &read);
-        Ok((read, false))
+        self.graph.run_one(Some(reads.clone()), trace)?;
+        let reads = Some(reads);
+        trace.add(self.name(), start, &reads);
+        Ok((reads, false))
     }
 
     fn required_names(&self) -> &[LabelOrAttr] {

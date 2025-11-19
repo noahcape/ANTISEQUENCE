@@ -473,6 +473,24 @@ impl StrMappings {
         self.mappings
             .retain(|m| m.label.bytes().next() != Some(b'_'));
     }
+
+    pub fn recycle(&mut self, string: Vec<u8>, origin: Arc<Origin>, idx: usize) {
+        self.mappings.clear();
+        self.mappings.push(Mapping::new_default(string.len()));
+        self.string = string;
+        self.qual = None;
+        self.origin = origin;
+        self.idx = idx;
+    }
+
+    pub fn recycle_with_qual(&mut self, string: Vec<u8>, qual: Vec<u8>, origin: Arc<Origin>, idx: usize) {
+        self.mappings.clear();
+        self.mappings.push(Mapping::new_default(string.len()));
+        self.string = string;
+        self.qual = Some(qual);
+        self.origin = origin;
+        self.idx = idx;
+    }
 }
 
 /// A labeled mapping that corresponds to an interval/region in a string.
@@ -618,10 +636,6 @@ impl Default for SmallAttrMap {
 }
 
 impl SmallAttrMap {
-    fn len(&self) -> usize {
-        self.map.as_ref().map(|m| m.len()).unwrap_or(self.small.len())
-    }
-
     fn clear(&mut self) {
         self.small.clear();
         if let Some(m) = &mut self.map { m.clear(); }
@@ -690,6 +704,11 @@ impl Read {
     }
 
     #[inline(always)]
+    pub fn clear(&mut self) {
+        self.str_mappings.clear();
+    }
+
+    #[inline(always)]
     pub fn has_names(&self, names: &[crate::expr::LabelOrAttr]) -> bool {
         for name in names {
             match name {
@@ -748,6 +767,143 @@ impl Read {
             None => StrMappings::new(seq.to_owned(), origin, idx),
         };
         self.str_mappings.push((StrType::Seq(str_type_idx), seq_sm));
+    }
+
+    pub fn add_fastq_recycled(
+        &mut self,
+        str_type_idx: u8,
+        name: &[u8],
+        seq: &[u8],
+        qual: &[u8],
+        origin: Arc<Origin>,
+        idx: usize,
+    ) {
+        // Try to reuse existing StrMappings if they exist
+        let name_type = StrType::Name(str_type_idx);
+        let seq_type = StrType::Seq(str_type_idx);
+        
+        let mut name_found = false;
+        let mut seq_found = false;
+        
+        for (t, sm) in &mut self.str_mappings {
+            if *t == name_type {
+                let mut s = std::mem::take(&mut sm.string);
+                s.clear();
+                s.extend_from_slice(name);
+                sm.recycle(s, Arc::clone(&origin), idx);
+                name_found = true;
+            } else if *t == seq_type {
+                let mut s = std::mem::take(&mut sm.string);
+                s.clear();
+                s.extend_from_slice(seq);
+                
+                let mut q = sm.qual.take().unwrap_or_default();
+                q.clear();
+                q.extend_from_slice(qual);
+                
+                sm.recycle_with_qual(s, q, Arc::clone(&origin), idx);
+                seq_found = true;
+            }
+        }
+        
+        if !name_found {
+            let name = StrMappings::new(name.to_owned(), Arc::clone(&origin), idx);
+            self.str_mappings.push((name_type, name));
+        }
+        if !seq_found {
+            let seq = StrMappings::new_with_qual(seq.to_owned(), qual.to_owned(), origin, idx);
+            self.str_mappings.push((seq_type, seq));
+        }
+    }
+
+    pub fn add_fastq_parts_recycled(
+        &mut self,
+        str_type_idx: u8,
+        name: Option<&[u8]>,
+        seq: &[u8],
+        qual: Option<&[u8]>,
+        origin: Arc<Origin>,
+        idx: usize,
+    ) {
+        let name_type = StrType::Name(str_type_idx);
+        let seq_type = StrType::Seq(str_type_idx);
+        
+        let mut name_found = false;
+        let mut seq_found = false;
+        
+        for (t, sm) in &mut self.str_mappings {
+            if *t == name_type && name.is_some() {
+                let n = name.unwrap();
+                let mut s = std::mem::take(&mut sm.string);
+                s.clear();
+                s.extend_from_slice(n);
+                sm.recycle(s, Arc::clone(&origin), idx);
+                name_found = true;
+            } else if *t == seq_type {
+                let mut s = std::mem::take(&mut sm.string);
+                s.clear();
+                s.extend_from_slice(seq);
+                
+                if let Some(q_bytes) = qual {
+                    let mut q = sm.qual.take().unwrap_or_default();
+                    q.clear();
+                    q.extend_from_slice(q_bytes);
+                    sm.recycle_with_qual(s, q, Arc::clone(&origin), idx);
+                } else {
+                    sm.recycle(s, Arc::clone(&origin), idx);
+                }
+                seq_found = true;
+            }
+        }
+        
+        if !name_found {
+            if let Some(n) = name {
+                let name_sm = StrMappings::new(n.to_owned(), Arc::clone(&origin), idx);
+                self.str_mappings.push((name_type, name_sm));
+            }
+        }
+        if !seq_found {
+            let seq_sm = match qual {
+                Some(q) => StrMappings::new_with_qual(seq.to_owned(), q.to_owned(), origin, idx),
+                None => StrMappings::new(seq.to_owned(), origin, idx),
+            };
+            self.str_mappings.push((seq_type, seq_sm));
+        }
+    }
+
+    pub fn set_fastq_entry(
+        &mut self,
+        slot_idx: usize,
+        str_type: StrType,
+        string: &[u8],
+        qual: Option<&[u8]>,
+        origin: Arc<Origin>,
+        idx: usize
+    ) {
+        if slot_idx < self.str_mappings.len() {
+            let (t, sm) = &mut self.str_mappings[slot_idx];
+            *t = str_type;
+            
+            let mut s = std::mem::take(&mut sm.string);
+            s.clear();
+            s.extend_from_slice(string);
+            
+            if let Some(q_bytes) = qual {
+                let mut q = sm.qual.take().unwrap_or_default();
+                q.clear();
+                q.extend_from_slice(q_bytes);
+                sm.recycle_with_qual(s, q, origin, idx);
+            } else {
+                sm.recycle(s, origin, idx);
+            }
+        } else {
+            let sm = if let Some(q) = qual {
+                StrMappings::new_with_qual(string.to_owned(), q.to_owned(), origin, idx)
+            } else {
+                StrMappings::new(string.to_owned(), origin, idx)
+            };
+            self.str_mappings.push((str_type, sm));
+        }
     }
 
     #[inline(always)]

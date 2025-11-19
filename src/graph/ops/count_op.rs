@@ -42,18 +42,20 @@ impl CountOp {
 }
 
 impl<T: Trace> GraphNode<T> for CountOp {
-    fn run_inner(&self, read: Read) -> Result<(Option<Read>, bool)> {
-        for (c, n) in self.counts.iter().zip(&self.selector_exprs) {
-            if n.eval_bool(&read).map_err(|e| Error::NameError {
-                source: e,
-                read: read.clone(),
-                context: Self::NAME,
-            })? {
-                c.fetch_add(1, Ordering::Relaxed);
+    fn run_inner(&self, reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
+        for read in &reads {
+            for (c, n) in self.counts.iter().zip(&self.selector_exprs) {
+                if n.eval_bool(read).map_err(|e| Error::NameError {
+                    source: e,
+                    read: read.clone(),
+                    context: Self::NAME,
+                })? {
+                    c.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
 
-        Ok((Some(read), false))
+        Ok((Some(reads), false))
     }
 
     fn required_names(&self) -> &[LabelOrAttr] {

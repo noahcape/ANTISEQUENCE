@@ -19,19 +19,30 @@ impl RetainOp {
 }
 
 impl<T: Trace> GraphNode<T> for RetainOp {
-    fn run_inner(&self, read: Read) -> Result<(Option<Read>, bool)> {
-        if self
-            .selector_expr
-            .eval_bool(&read)
-            .map_err(|e| Error::NameError {
-                source: e,
-                read: read.clone(),
-                context: Self::NAME,
-            })?
-        {
-            Ok((Some(read), false))
-        } else {
+    fn run_inner(&self, mut reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
+        let mut error = None;
+        reads.retain(|read| {
+            match self.selector_expr.eval_bool(read) {
+                Ok(keep) => keep,
+                Err(e) => {
+                    error = Some(Error::NameError {
+                        source: e,
+                        read: read.clone(),
+                        context: Self::NAME,
+                    });
+                    false // drop read if error? or stop?
+                }
+            }
+        });
+        
+        if let Some(e) = error {
+            return Err(e);
+        }
+        
+        if reads.is_empty() {
             Ok((None, false))
+        } else {
+            Ok((Some(reads), false))
         }
     }
 

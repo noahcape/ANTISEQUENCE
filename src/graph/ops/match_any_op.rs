@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::marker::Send;
 
 use crate::graph::*;
+use crate::inline_string::InlineString;
 use crate::seed_search::*;
 use crate::Patterns;
 
@@ -107,21 +108,16 @@ impl MatchAnyOp {
 }
 
 impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
-    fn run_inner(&self, mut read: Read) -> Result<(Option<Read>, bool)> {
-        let text = read
-            .substring(self.label.str_type, self.label.label)
-            .map_err(|e| Error::NameError {
-                source: e,
-                read: read.clone(),
-                context: Self::NAME,
-            })?;
-
+    fn run_inner(&self, mut reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
+        
+        // Access thread-local aligner once per batch
         use MatchType::*;
         let aligner_cell = self.aligner.get_or(|| {
             let init_len = if self.max_literal_len > 0 {
                 self.max_literal_len * 2
             } else {
-                text.len() * 2
+                // Heuristic since we don't know text length yet, use reasonable default
+                512 
             };
 
             match self.match_type {
@@ -145,324 +141,383 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
             ((1.0 - identity).max(0.0) * (pattern_len as f64)).ceil() as usize
         };
 
-        let mut seed_hits = FxHashSet::default();
+        for read in &mut reads {
+            let text = read
+                .substring(self.label.str_type, self.label.label)
+                .map_err(|e| Error::NameError {
+                    source: e,
+                    read: read.clone(),
+                    context: Self::NAME,
+                })?;
 
-        if let Some(seed_searcher) = &self.seed_searcher {
-            let (text_slice, text_offset, use_i) = match self.match_type {
-                Exact => (text, 0, false),
-                ExactPrefix => (&text[..text.len().min(self.max_literal_len)], 0, false),
-                ExactSuffix => {
-                    let offset = text.len().saturating_sub(self.max_literal_len);
-                    (&text[offset..], offset, false)
-                }
-                ExactSearch => (text, 0, true),
-                ExactBoundedMatch { from, to } => {
-                    let to = text.len().min(to);
-                    (&text[from..to], 0, false)
-                },
-                Hamming(_) => (text, 0, false),
-                HammingPrefix(_) => (&text[..text.len().min(self.max_literal_len)], 0, false),
-                HammingSuffix(_) => {
-                    let offset = text.len().saturating_sub(self.max_literal_len);
-                    (&text[offset..], offset, false)
-                }
-                HammingSearch(_) => (text, 0, true),
-                HammingBoundedMatch {
-                    threshold: _,
-                    from,
-                    to,
-                } => {
-                    let to = text.len().min(to);
-                    (&text[from..to], 0, false)
-                },
-                GlobalAln(_) => (text, 0, false),
-                LocalAln { .. } => (text, 0, true),
-                PrefixAln { identity, .. } => (
-                    &text[..text
-                        .len()
-                        .min(self.max_literal_len + additional(identity, self.max_literal_len))],
-                    0,
-                    false,
-                ),
-                SuffixAln { identity, .. } => {
-                    let offset = text.len().saturating_sub(
-                        self.max_literal_len + additional(identity, self.max_literal_len),
-                    );
-                    (&text[offset..], offset, false)
-                }
-            };
+            let mut seed_hits = FxHashSet::default();
 
-            seed_searcher.search(
-                text_slice,
-                |SeedMatch {
-                     pattern_idx,
-                     pattern_i,
-                     text_i,
-                 }| {
-                    let text_i = if use_i {
-                        Some(((text_offset + text_i) as isize) - (pattern_i as isize))
-                    } else {
-                        None
-                    };
-                    seed_hits.insert((pattern_idx, text_i));
-                },
-            );
-        } else {
-            seed_hits.extend(self.patterns.iter_literals().map(|(i, _)| (i, None)));
-        }
+            if let Some(seed_searcher) = &self.seed_searcher {
+                let (text_slice, text_offset, use_i) = match self.match_type {
+                    Exact => (text, 0, false),
+                    ExactPrefix => (&text[..text.len().min(self.max_literal_len)], 0, false),
+                    ExactSuffix => {
+                        let offset = text.len().saturating_sub(self.max_literal_len);
+                        (&text[offset..], offset, false)
+                    }
+                    ExactSearch => (text, 0, true),
+                    ExactBoundedMatch { from, to } => {
+                        let to = text.len().min(to);
+                        (&text[from..to], 0, false)
+                    },
+                    Hamming(_) => (text, 0, false),
+                    HammingPrefix(_) => (&text[..text.len().min(self.max_literal_len)], 0, false),
+                    HammingSuffix(_) => {
+                        let offset = text.len().saturating_sub(self.max_literal_len);
+                        (&text[offset..], offset, false)
+                    }
+                    HammingSearch(_) => (text, 0, true),
+                    HammingBoundedMatch {
+                        threshold: _,
+                        from,
+                        to,
+                    } => {
+                        let to = text.len().min(to);
+                        (&text[from..to], 0, false)
+                    },
+                    GlobalAln(_) => (text, 0, false),
+                    LocalAln { .. } => (text, 0, true),
+                    PrefixAln { identity, .. } => (
+                        &text[..text
+                            .len()
+                            .min(self.max_literal_len + additional(identity, self.max_literal_len))],
+                        0,
+                        false,
+                    ),
+                    SuffixAln { identity, .. } => {
+                        let offset = text.len().saturating_sub(
+                            self.max_literal_len + additional(identity, self.max_literal_len),
+                        );
+                        (&text[offset..], offset, false)
+                    }
+                };
 
-        if !self.all_literals {
-            seed_hits.extend(self.patterns.iter_exprs().map(|(i, _)| (i, None)));
-        }
-
-        let mut max_matches = 0;
-        let mut max_pattern = None;
-        let mut max_pattern_idx = std::usize::MAX;
-        let mut max_cut_pos1 = 0;
-        let mut max_cut_pos2 = 0;
-        let mut multimatches = false;
-
-        for (pattern_idx, text_i) in seed_hits {
-            let pattern = &self.patterns.patterns()[pattern_idx];
-            let pattern_str_cow = pattern.get(&read).map_err(|e| Error::NameError {
-                source: e,
-                read: read.clone(),
-                context: Self::NAME,
-            })?;
-            let pattern_str: &[u8] = &pattern_str_cow;
-            let pattern_len = pattern_str.len();
-
-            if max_matches > pattern_len {
-                continue;
+                seed_searcher.search(
+                    text_slice,
+                    |SeedMatch {
+                         pattern_idx,
+                         pattern_i,
+                         text_i,
+                     }| {
+                        let text_i = if use_i {
+                            Some(((text_offset + text_i) as isize) - (pattern_i as isize))
+                        } else {
+                            None
+                        };
+                        seed_hits.insert((pattern_idx, text_i));
+                    },
+                );
+            } else {
+                seed_hits.extend(self.patterns.iter_literals().map(|(i, _)| (i, None)));
             }
 
-            let matches = match self.match_type {
-                Exact => {
-                    if text == pattern_str {
-                        Some((pattern_len, pattern_len, 0))
-                    } else {
-                        None
+            if !self.all_literals {
+                seed_hits.extend(self.patterns.iter_exprs().map(|(i, _)| (i, None)));
+            }
+
+            let mut max_matches = 0;
+            let mut max_pattern = None;
+            let mut max_pattern_idx = std::usize::MAX;
+            let mut max_cut_pos1 = 0;
+            let mut max_cut_pos2 = 0;
+            let mut multimatches = false;
+
+            for (pattern_idx, text_i) in seed_hits {
+                let pattern = &self.patterns.patterns()[pattern_idx];
+                let pattern_str_cow = pattern.get(&read).map_err(|e| Error::NameError {
+                    source: e,
+                    read: read.clone(),
+                    context: Self::NAME,
+                })?;
+                let pattern_str: &[u8] = &pattern_str_cow;
+                let pattern_len = pattern_str.len();
+
+                if max_matches > pattern_len {
+                    continue;
+                }
+
+                let matches = match self.match_type {
+                    Exact => {
+                        if text == pattern_str {
+                            Some((pattern_len, pattern_len, 0))
+                        } else {
+                            None
+                        }
                     }
-                }
-                ExactPrefix => {
-                    if pattern_len <= text.len() && &text[..pattern_len] == pattern_str {
-                        Some((pattern_len, pattern_len, 0))
-                    } else {
-                        None
+                    ExactPrefix => {
+                        if pattern_len <= text.len() && &text[..pattern_len] == pattern_str {
+                            Some((pattern_len, pattern_len, 0))
+                        } else {
+                            None
+                        }
                     }
-                }
-                ExactSuffix => {
-                    if pattern_len <= text.len() && &text[text.len() - pattern_len..] == pattern_str
-                    {
-                        Some((pattern_len, text.len() - pattern_len, 0))
-                    } else {
-                        None
+                    ExactSuffix => {
+                        if pattern_len <= text.len() && &text[text.len() - pattern_len..] == pattern_str
+                        {
+                            Some((pattern_len, text.len() - pattern_len, 0))
+                        } else {
+                            None
+                        }
                     }
-                }
-                ExactSearch => {
-                    let (text_start, text_end) = if let Some(text_i) = text_i {
-                        (
-                            text_i.max(0) as usize,
-                            text.len().min((text_i + (pattern_len as isize)) as usize),
-                        )
-                    } else {
-                        (0, text.len())
-                    };
-                    let text_around = &text[text_start..text_end];
-                    memmem::find(text_around, pattern_str)
-                        .map(|i| (pattern_len, text_start + i, text_start + i + pattern_len))
-                }
-                ExactBoundedMatch { from, to } => {
-                    let to = text.len().min(to);
-                    let text_around = &text[from..=to];
-                    memmem::find(text_around, pattern_str)
-                        .map(|i| (pattern_len, from + i, from + i + pattern_len))
-                }
-                Hamming(t) => {
-                    let t = t.get(pattern_len);
-                    hamming(text, pattern_str, t).map(|m| (m, pattern_len, 0))
-                }
-                HammingPrefix(t) => {
-                    if pattern_len <= text.len() {
+                    ExactSearch => {
+                        let (text_start, text_end) = if let Some(text_i) = text_i {
+                            (
+                                text_i.max(0) as usize,
+                                text.len().min((text_i + (pattern_len as isize)) as usize),
+                            )
+                        } else {
+                            (0, text.len())
+                        };
+                        let text_around = &text[text_start..text_end];
+                        memmem::find(text_around, pattern_str)
+                            .map(|i| (pattern_len, text_start + i, text_start + i + pattern_len))
+                    }
+                    ExactBoundedMatch { from, to } => {
+                        let to = text.len().min(to);
+                        let text_around = &text[from..=to];
+                        memmem::find(text_around, pattern_str)
+                            .map(|i| (pattern_len, from + i, from + i + pattern_len))
+                    }
+                    Hamming(t) => {
                         let t = t.get(pattern_len);
-                        hamming(&text[..pattern_len], pattern_str, t).map(|m| (m, pattern_len, 0))
-                    } else {
-                        None
+                        hamming(text, pattern_str, t).map(|m| (m, pattern_len, 0))
                     }
-                }
-                HammingSuffix(t) => {
-                    if pattern_len <= text.len() {
+                    HammingPrefix(t) => {
+                        if pattern_len <= text.len() {
+                            let t = t.get(pattern_len);
+                            hamming(&text[..pattern_len], pattern_str, t).map(|m| (m, pattern_len, 0))
+                        } else {
+                            None
+                        }
+                    }
+                    HammingSuffix(t) => {
+                        if pattern_len <= text.len() {
+                            let t = t.get(pattern_len);
+                            hamming(&text[text.len() - pattern_len..], pattern_str, t)
+                                .map(|m| (m, text.len() - pattern_len, 0))
+                        } else {
+                            None
+                        }
+                    }
+                    HammingSearch(t) => {
+                        let (text_start, text_end) = if let Some(text_i) = text_i {
+                            (
+                                text_i.max(0) as usize,
+                                text.len().min((text_i + (pattern_len as isize)) as usize),
+                            )
+                        } else {
+                            (0, text.len())
+                        };
+                        let text_around = &text[text_start..text_end];
                         let t = t.get(pattern_len);
-                        hamming(&text[text.len() - pattern_len..], pattern_str, t)
-                            .map(|m| (m, text.len() - pattern_len, 0))
-                    } else {
-                        None
-                    }
-                }
-                HammingSearch(t) => {
-                    let (text_start, text_end) = if let Some(text_i) = text_i {
-                        (
-                            text_i.max(0) as usize,
-                            text.len().min((text_i + (pattern_len as isize)) as usize),
-                        )
-                    } else {
-                        (0, text.len())
-                    };
-                    let text_around = &text[text_start..text_end];
-                    let t = t.get(pattern_len);
-                    hamming_search(text_around, pattern_str, t).map(|(m, start_idx, end_idx)| {
-                        (m, text_start + start_idx, text_start + end_idx)
-                    })
-                }
-                HammingBoundedMatch {
-                    threshold: t,
-                    from,
-                    to,
-                } => {
-                    let t = t.get(pattern_len);
-                    let to = text.len().min(to);
-                    let text_around = &text[from..=to];
-                    hamming_search(text_around, pattern_str, t)
-                        .map(|(m, start_idx, end_idx)| (m, from + start_idx, from + end_idx))
-                }
-                GlobalAln(identity) => aligner_cell
-                    .as_ref()
-                    .unwrap()
-                    .borrow_mut()
-                    .align(text, pattern_str, identity, identity)
-                    .map(|(m, _, end_idx)| (m, end_idx, 0)),
-                LocalAln { identity, overlap } => {
-                    let a = additional(identity, pattern_len) as isize;
-                    let (text_start, text_end) = if let Some(text_i) = text_i {
-                        (
-                            (text_i - a).max(0) as usize,
-                            text.len()
-                                .min((text_i + (pattern_len as isize) + a) as usize),
-                        )
-                    } else {
-                        (0, text.len())
-                    };
-                    let text_around = &text[text_start..text_end];
-                    aligner_cell
-                        .as_ref()
-                        .unwrap()
-                        .borrow_mut()
-                        .align(text_around, pattern_str, identity, overlap)
-                        .map(|(m, start_idx, end_idx)| {
+                        hamming_search(text_around, pattern_str, t).map(|(m, start_idx, end_idx)| {
                             (m, text_start + start_idx, text_start + end_idx)
                         })
-                }
-                PrefixAln { identity, overlap } => {
-                    let a = additional(identity, pattern_len);
-                    aligner_cell
+                    }
+                    HammingBoundedMatch {
+                        threshold: t,
+                        from,
+                        to,
+                    } => {
+                        let t = t.get(pattern_len);
+                        let to = text.len().min(to);
+                        let text_around = &text[from..=to];
+                        hamming_search(text_around, pattern_str, t)
+                            .map(|(m, start_idx, end_idx)| (m, from + start_idx, from + end_idx))
+                    }
+                    GlobalAln(identity) => aligner_cell
                         .as_ref()
                         .unwrap()
                         .borrow_mut()
-                        .align(
-                            &text[..text.len().min(pattern_len + a)],
-                            pattern_str,
-                            identity,
-                            overlap,
-                        )
-                        .map(|(m, _, end_idx)| (m, end_idx, 0))
-                }
-                SuffixAln { identity, overlap } => {
-                    let a = additional(identity, pattern_len);
-                    let text_start = text.len().saturating_sub(pattern_len + a);
-                    aligner_cell
-                        .as_ref()
-                        .unwrap()
-                        .borrow_mut()
-                        .align(&text[text_start..], pattern_str, identity, overlap)
-                        .map(|(m, start_idx, _)| (m, text_start + start_idx, 0))
-                }
-            };
+                        .align(text, pattern_str, identity, identity)
+                        .map(|(m, _, end_idx)| (m, end_idx, 0)),
+                    LocalAln { identity, overlap } => {
+                        let a = additional(identity, pattern_len) as isize;
+                        let (text_start, text_end) = if let Some(text_i) = text_i {
+                            (
+                                (text_i - a).max(0) as usize,
+                                text.len()
+                                    .min((text_i + (pattern_len as isize) + a) as usize),
+                            )
+                        } else {
+                            (0, text.len())
+                        };
+                        let text_around = &text[text_start..text_end];
+                        aligner_cell
+                            .as_ref()
+                            .unwrap()
+                            .borrow_mut()
+                            .align(text_around, pattern_str, identity, overlap)
+                            .map(|(m, start_idx, end_idx)| {
+                                (m, text_start + start_idx, text_start + end_idx)
+                            })
+                    }
+                    PrefixAln { identity, overlap } => {
+                        let a = additional(identity, pattern_len);
+                        aligner_cell
+                            .as_ref()
+                            .unwrap()
+                            .borrow_mut()
+                            .align(
+                                &text[..text.len().min(pattern_len + a)],
+                                pattern_str,
+                                identity,
+                                overlap,
+                            )
+                            .map(|(m, _, end_idx)| (m, end_idx, 0))
+                    }
+                    SuffixAln { identity, overlap } => {
+                        let a = additional(identity, pattern_len);
+                        let text_start = text.len().saturating_sub(pattern_len + a);
+                        aligner_cell
+                            .as_ref()
+                            .unwrap()
+                            .borrow_mut()
+                            .align(&text[text_start..], pattern_str, identity, overlap)
+                            .map(|(m, start_idx, _)| (m, text_start + start_idx, 0))
+                    }
+                };
 
-            if let Some((matches, cut_pos1, cut_pos2)) = matches {
-                if matches > max_matches {
-                    max_matches = matches;
-                    max_pattern = Some((pattern_str_cow, pattern.attrs()));
-                    max_pattern_idx = pattern_idx;
-                    max_cut_pos1 = cut_pos1;
-                    max_cut_pos2 = cut_pos2;
-                    multimatches = false;
-                } else if matches == max_matches && pattern_idx != max_pattern_idx {
-                    multimatches = true;
+                if let Some((matches, cut_pos1, cut_pos2)) = matches {
+                    if matches > max_matches {
+                        max_matches = matches;
+                        max_pattern = Some((pattern_str_cow, pattern.attrs()));
+                        max_pattern_idx = pattern_idx;
+                        max_cut_pos1 = cut_pos1;
+                        max_cut_pos2 = cut_pos2;
+                        multimatches = false;
+                    } else if matches == max_matches && pattern_idx != max_pattern_idx {
+                        multimatches = true;
+                    }
                 }
             }
-        }
 
-        if let Some((pattern_str, pattern_attrs)) = max_pattern {
-            let pattern_str = pattern_str.into_owned();
-            let mapping = read
-                .mapping_mut(self.label.str_type, self.label.label)
-                .unwrap();
-
-            if let Some(pattern_name) = self.patterns.pattern_name() {
-                *mapping.data_mut(pattern_name) = Data::Bytes(pattern_str);
-            }
-
-            if let Some(multimatch_name) = self.patterns.multimatch_name() {
-                *mapping.data_mut(multimatch_name) = Data::Bool(multimatches);
-            }
-
-            for (&attr, data) in self.patterns.attr_names().iter().zip(pattern_attrs) {
-                *mapping.data_mut(attr) = data.clone();
-            }
-
-            match self.match_type.num_mappings() {
-                1 => {
-                    let start = mapping.start;
-                    let str_mappings = read.str_mappings_mut(self.label.str_type).unwrap();
-                    str_mappings.add_mapping(
-                        self.new_labels[0].as_ref().map(|l| l.label),
-                        start,
-                        max_cut_pos1,
-                    );
-                }
-                2 => {
-                    read.cut(
-                        self.label.str_type,
-                        self.label.label,
-                        self.new_labels[0].as_ref().map(|l| l.label),
-                        self.new_labels[1].as_ref().map(|l| l.label),
-                        max_cut_pos1 as isize,
-                    )
-                    .unwrap_or_else(|e| panic!("Error in {}: {e}", Self::NAME));
-                }
-                3 => {
-                    let offset = mapping.start;
-                    let mapping_len = mapping.len;
-
-                    let str_mappings = read.str_mappings_mut(self.label.str_type).unwrap();
-                    str_mappings.add_mapping(
-                        self.new_labels[0].as_ref().map(|l| l.label),
-                        offset,
-                        max_cut_pos1,
-                    );
-                    str_mappings.add_mapping(
-                        self.new_labels[1].as_ref().map(|l| l.label),
-                        offset + max_cut_pos1,
-                        max_cut_pos2 - max_cut_pos1,
-                    );
-                    str_mappings.add_mapping(
-                        self.new_labels[2].as_ref().map(|l| l.label),
-                        offset + max_cut_pos2,
-                        mapping_len - max_cut_pos2,
-                    );
-                }
-                _ => unreachable!(),
-            }
-        } else {
-            if let Some(pattern_name) = self.patterns.pattern_name() {
-                *read
+            if let Some((pattern_str, pattern_attrs)) = max_pattern {
+                let pattern_str = pattern_str.into_owned();
+                let mapping = read
                     .mapping_mut(self.label.str_type, self.label.label)
-                    .unwrap()
-                    .data_mut(pattern_name) = Data::Bool(false);
+                    .unwrap();
+
+                if let Some(pattern_name) = self.patterns.pattern_name() {
+                    *mapping.data_mut(pattern_name) = Data::Bytes(pattern_str);
+                }
+
+                if let Some(multimatch_name) = self.patterns.multimatch_name() {
+                    let val = if multimatches {
+                        b"true".to_vec()
+                    } else {
+                        b"false".to_vec()
+                    };
+                    *mapping.data_mut(multimatch_name) = Data::Bytes(val);
+                }
+
+                use crate::inline_string::InlineString;
+                for (&attr, data) in self.patterns.attr_names().iter().zip(pattern_attrs) {
+                    *mapping.data_mut(attr) = data.clone();
+                }
+                
+                match self.match_type.num_mappings() {
+                    1 => {
+                        let start = mapping.start;
+                        let str_mappings = read.str_mappings_mut(self.label.str_type).unwrap();
+                        str_mappings.add_mapping(
+                            self.new_labels[0].as_ref().map(|l| l.label),
+                            start,
+                            max_cut_pos1,
+                        );
+                    }
+                    2 => {
+                        read.cut(
+                            self.label.str_type,
+                            self.label.label,
+                            self.new_labels[0].as_ref().map(|l| l.label),
+                            self.new_labels[1].as_ref().map(|l| l.label),
+                            max_cut_pos1 as isize,
+                        )
+                        .unwrap_or_else(|e| panic!("Error in {}: {e}", Self::NAME));
+                    }
+                    3 => {
+                        let offset = mapping.start;
+                        let mapping_len = mapping.len;
+
+                        let str_mappings = read.str_mappings_mut(self.label.str_type).unwrap();
+                        str_mappings.add_mapping(
+                            self.new_labels[0].as_ref().map(|l| l.label),
+                            offset,
+                            max_cut_pos1,
+                        );
+                        str_mappings.add_mapping(
+                            self.new_labels[1].as_ref().map(|l| l.label),
+                            offset + max_cut_pos1,
+                            max_cut_pos2 - max_cut_pos1,
+                        );
+                        str_mappings.add_mapping(
+                            self.new_labels[2].as_ref().map(|l| l.label),
+                            offset + max_cut_pos2,
+                            mapping_len - max_cut_pos2,
+                        );
+                    }
+                    _ => unreachable!(),
+                }
+            } else {
+                let (start, len) = {
+                    let mapping = read
+                        .mapping(self.label.str_type, self.label.label)
+                        .unwrap();
+                    (mapping.start, mapping.len)
+                };
+
+                // Pass-through the label if it's a 1-to-1 transform (e.g. MatchType::Exact)
+                if self.match_type.num_mappings() == 1 {
+                    if let Some(new_label) = &self.new_labels[0] {
+                        let str_mappings = read.str_mappings_mut(self.label.str_type).unwrap();
+                        str_mappings.add_mapping(Some(new_label.label), start, len);
+                    }
+                }
+
+                let mapping = read
+                    .mapping_mut(self.label.str_type, self.label.label)
+                    .unwrap();
+
+                // Reset pattern name (unused by seqproc map) on no-match
+                if let Some(pattern_name) = self.patterns.pattern_name() {
+                    *mapping.data_mut(pattern_name) = Data::Bytes(Vec::new());
+                }
+
+                // For seqproc's map(), `ambig` is used to derive the boolean `MAPPED = !ambig`.
+                // On an unmatched read we want MAPPED == false so that:
+                //   * the fallback graph (e.g. pad_to) runs, and
+                //   * the mapping graph that dereferences `.sub` is NOT executed.
+                // Since `expect_bool` treats non-empty, non-"false" bytes as true,
+                // we store "true" here so that `!ambig` evaluates to false.
+                if let Some(multimatch_name) = self.patterns.multimatch_name() {
+                    *mapping.data_mut(multimatch_name) = Data::Bytes(b"true".to_vec());
+                }
+
+                // Initialize any pattern attributes; `sub` is left as empty bytes for no-match.
+                for &attr in self.patterns.attr_names() {
+                    let name = attr.as_str().as_bytes();
+                    if name == b"sub" {
+                        *mapping.data_mut(attr) = Data::Bytes(Vec::new());
+                    } else if name == b"ambig" {
+                        *mapping.data_mut(attr) = Data::Bytes(b"true".to_vec());
+                    } else {
+                        *mapping.data_mut(attr) = Data::Bytes(Vec::new());
+                    }
+                }
+
+                // Force-create defaults for `sub`/`ambig` if they were not in attr_names.
+                *mapping.data_mut(InlineString::new(b"sub")) = Data::Bytes(Vec::new());
+                *mapping.data_mut(InlineString::new(b"ambig")) = Data::Bytes(b"true".to_vec());
             }
         }
 
-        Ok((Some(read), false))
+        Ok((Some(reads), false))
     }
 
     fn required_names(&self) -> &[LabelOrAttr] {

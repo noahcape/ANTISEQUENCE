@@ -29,10 +29,10 @@ impl<T: Trace> TimeOp<T> {
 }
 
 impl<T: Trace> GraphNode<T> for TimeOp<T> {
-    fn run(&self, read: Option<Read>, trace: &T) -> Result<(Option<Read>, bool)> {
-        let s = trace.start(&read);
+    fn run(&self, reads: Option<Vec<Read>>, trace: &T) -> Result<(Option<Vec<Read>>, bool)> {
+        let s = trace.start(&reads);
         let start = Instant::now();
-        let res = self.graph.run_one(read, trace)?;
+        let res = self.graph.run_one(reads, trace)?;
         let elapsed = start.elapsed();
         let duration = self.duration.get_or(|| Cell::new(Duration::default()));
         duration.set(duration.get() + elapsed);

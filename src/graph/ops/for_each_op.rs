@@ -14,9 +14,11 @@ impl<F: Fn(&mut Read) + Send + Sync> ForEachOp<F> {
 }
 
 impl<F: Fn(&mut Read) + Send + Sync, T: Trace> GraphNode<T> for ForEachOp<F> {
-    fn run_inner(&self, mut read: Read) -> Result<(Option<Read>, bool)> {
-        (self.func)(&mut read);
-        Ok((Some(read), false))
+    fn run_inner(&self, mut reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
+        for read in &mut reads {
+            (self.func)(read);
+        }
+        Ok((Some(reads), false))
     }
 
     fn required_names(&self) -> &[LabelOrAttr] {

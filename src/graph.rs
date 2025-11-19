@@ -20,16 +20,16 @@ pub struct Graph<T: Trace = NoTrace> {
 
 pub trait GraphNode<T: Trace = NoTrace>: Send + Sync {
     #[inline(always)]
-    fn run(&self, read: Option<Read>, trace: &T) -> Result<(Option<Read>, bool)> {
-        let start = trace.start(&read);
-        let Some(read) = read else {
-            panic!("Expected some read!")
+    fn run(&self, reads: Option<Vec<Read>>, trace: &T) -> Result<(Option<Vec<Read>>, bool)> {
+        let start = trace.start(&reads);
+        let Some(reads) = reads else {
+            panic!("Expected some reads!")
         };
-        let res = self.run_inner(read)?;
+        let res = self.run_inner(reads)?;
         trace.add(self.name(), start, &res.0);
         Ok(res)
     }
-    fn run_inner(&self, _read: Read) -> Result<(Option<Read>, bool)> {
+    fn run_inner(&self, _reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
         unimplemented!()
     }
     fn required_names(&self) -> &[LabelOrAttr];
@@ -64,8 +64,15 @@ impl<T: Trace> Graph<T> {
     }
 
     fn run_trace_inner(&self, trace: &T) -> Result<()> {
+        let mut next_input: Option<Vec<Read>> = None;
         loop {
-            let (_, done) = self.run_one(None, trace)?;
+            // Pass next_input to recycle the vector
+            let (out, done) = self.run_one(next_input, trace)?;
+            
+            // Recycle output vector for next input, but DO NOT clear.
+            // We let InputFastqOp handle the clearing/recycling logic to reuse Read internal buffers.
+            next_input = out;
+            
             if done {
                 break;
             }
@@ -99,13 +106,13 @@ impl<T: Trace> Graph<T> {
         });
     }
 
-    /// Run a single read through the graph.
+    /// Run a single batch of reads through the graph.
     ///
     /// Returns an additional boolean indicating whether the graph is done executing.
     /// If the required label or attribute names for an operation are not available,
     /// the the operation is skipped.
     #[inline(always)]
-    pub fn run_one(&self, mut curr: Option<Read>, trace: &T) -> Result<(Option<Read>, bool)> {
+    pub fn run_one(&self, mut curr: Option<Vec<Read>>, trace: &T) -> Result<(Option<Vec<Read>>, bool)> {
         let trust = trust_required_checks();
         for node in &self.nodes {
             // If there is no current read, only the input node can produce one.
@@ -118,10 +125,13 @@ impl<T: Trace> Graph<T> {
             }
 
             // Skip nodes whose requirements are not satisfied, unless trusted.
+            // Heuristic: Check the first read as a representative.
             if !trust && !node.required_names().is_empty() {
-                if let Some(read) = &curr {
-                    if !read.has_names(node.required_names()) {
-                        continue;
+                if let Some(reads) = &curr {
+                    if let Some(first) = reads.first() {
+                        if !first.has_names(node.required_names()) {
+                            continue;
+                        }
                     }
                 }
             }
@@ -137,20 +147,22 @@ impl<T: Trace> Graph<T> {
         Ok((curr, false))
     }
 
-    /// Try running a single read through the graph.
+    /// Try running a single batch of reads through the graph.
     ///
     /// Returns two booleans: the first one is whether the read has "failed" (does not have
     /// a required label or attribute name) and the second one is whether the graph is done
     /// executing.
     pub fn try_run_one(
         &self,
-        mut curr: Option<Read>,
+        mut curr: Option<Vec<Read>>,
         trace: &T,
-    ) -> Result<(Option<Read>, bool, bool)> {
+    ) -> Result<(Option<Vec<Read>>, bool, bool)> {
         for node in &self.nodes {
-            if let Some(read) = &curr {
-                if !read.has_names(node.required_names()) {
-                    return Ok((curr, true, false));
+            if let Some(reads) = &curr {
+                if let Some(first) = reads.first() {
+                     if !first.has_names(node.required_names()) {
+                        return Ok((curr, true, false));
+                    }
                 }
             }
 

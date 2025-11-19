@@ -29,18 +29,20 @@ impl BernoulliOp {
 }
 
 impl<T: Trace> GraphNode<T> for BernoulliOp {
-    fn run_inner(&self, mut read: Read) -> Result<(Option<Read>, bool)> {
-        // use the index of the read in the seed for determinism when multithreading
-        let seed = (self.seed << 32).wrapping_add(read.first_idx() as u64);
-        let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed);
-        let rand_bool = self.bernoulli.sample(&mut rng);
+    fn run_inner(&self, mut reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
+        for read in &mut reads {
+            // use the index of the read in the seed for determinism when multithreading
+            let seed = (self.seed << 32).wrapping_add(read.first_idx() as u64);
+            let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed);
+            let rand_bool = self.bernoulli.sample(&mut rng);
 
-        // panic to make borrow checker happy
-        *read
-            .data_mut(self.attr.str_type, self.attr.label, self.attr.attr)
-            .unwrap_or_else(|e| panic!("Error in {}: {e}", Self::NAME)) = Data::Bool(rand_bool);
+            // panic to make borrow checker happy
+            *read
+                .data_mut(self.attr.str_type, self.attr.label, self.attr.attr)
+                .unwrap_or_else(|e| panic!("Error in {}: {e}", Self::NAME)) = Data::Bool(rand_bool);
+        }
 
-        Ok((Some(read), false))
+        Ok((Some(reads), false))
     }
 
     fn required_names(&self) -> &[LabelOrAttr] {

@@ -1,9 +1,5 @@
 use needletail::*;
 
-use thread_local::*;
-
-use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use parking_lot::Mutex;
@@ -20,13 +16,12 @@ fn chunk_size() -> usize {
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
             .filter(|&v| v > 0)
-            .unwrap_or(1024)
+            .unwrap_or(256)
     })
 }
 
 pub struct InputFastqOp<'reader> {
     readers: Vec<(Mutex<Box<dyn FastxReader + 'reader>>, Arc<Origin>)>,
-    buf: ThreadLocal<RefCell<VecDeque<Read>>>,
     idx: AtomicUsize,
     interleaved: usize,
 }
@@ -43,7 +38,6 @@ impl<'reader> InputFastqOp<'reader> {
 
         Ok(Self {
             readers: vec![(reader, Arc::new(Origin::File(file.as_ref().to_owned())))],
-            buf: ThreadLocal::new(),
             idx: AtomicUsize::new(0),
             interleaved: 1,
         })
@@ -64,7 +58,6 @@ impl<'reader> InputFastqOp<'reader> {
 
         Ok(Self {
             readers,
-            buf: ThreadLocal::new(),
             idx: AtomicUsize::new(0),
             interleaved: 1,
         })
@@ -79,7 +72,6 @@ impl<'reader> InputFastqOp<'reader> {
 
         Ok(Self {
             readers: vec![(reader, Arc::new(Origin::File(file.as_ref().to_owned())))],
-            buf: ThreadLocal::new(),
             idx: AtomicUsize::new(0),
             interleaved,
         })
@@ -92,7 +84,6 @@ impl<'reader> InputFastqOp<'reader> {
 
         Ok(Self {
             readers: vec![(reader, Arc::new(Origin::Bytes))],
-            buf: ThreadLocal::new(),
             idx: AtomicUsize::new(0),
             interleaved: 1,
         })
@@ -114,7 +105,6 @@ impl<'reader> InputFastqOp<'reader> {
 
         Ok(Self {
             readers,
-            buf: ThreadLocal::new(),
             idx: AtomicUsize::new(0),
             interleaved: 1,
         })
@@ -130,7 +120,6 @@ impl<'reader> InputFastqOp<'reader> {
 
         Ok(Self {
             readers: vec![(reader, Arc::new(Origin::Bytes))],
-            buf: ThreadLocal::new(),
             idx: AtomicUsize::new(0),
             interleaved,
         })
@@ -138,93 +127,127 @@ impl<'reader> InputFastqOp<'reader> {
 }
 
 impl<'reader, T: Trace> GraphNode<T> for InputFastqOp<'reader> {
-    fn run(&self, read: Option<Read>, trace: &T) -> Result<(Option<Read>, bool)> {
-        let start = trace.start(&read);
-        assert!(read.is_none(), "Expected no input reads for {}", Self::NAME);
-
+    fn run(&self, reads: Option<Vec<Read>>, trace: &T) -> Result<(Option<Vec<Read>>, bool)> {
+        let start = trace.start(&reads);
+        
         let cs = chunk_size();
-        let buf = self
-            .buf
-            .get_or(|| RefCell::new(VecDeque::with_capacity(cs)));
-        let mut b = buf.borrow_mut();
+        let mut b = reads.unwrap_or_else(|| Vec::with_capacity(cs));
+        // Do NOT clear b here, we want to reuse its elements.
 
-        if b.is_empty() {
-            // Lock readers once per refill to amortize lock overhead
-            let mut locked_readers = self
-                .readers
-                .iter()
-                .map(|(r, o)| (r.lock(), o))
-                .collect::<Vec<_>>();
+        // Lock readers once per refill to amortize lock overhead
+        let mut locked_readers = self
+            .readers
+            .iter()
+            .map(|(r, o)| (r.lock(), o))
+            .collect::<Vec<_>>();
 
-            'outer: for _ in 0..cs {
-                let idx = self.idx.fetch_add(self.interleaved, Ordering::Relaxed);
-                let mut curr_read = Read::new();
+        let mut i = 0;
+        'outer: for _ in 0..cs {
+            let idx = self.idx.fetch_add(self.interleaved, Ordering::Relaxed);
+            
+            if self.interleaved > 1 {
+                // interleaved records all come from one file
+                let (locked_reader, origin) = &mut locked_readers[0];
 
-                if self.interleaved > 1 {
-                    // interleaved records all come from one file
-                    let (locked_reader, origin) = &mut locked_readers[0];
-
-                    for i in 0..self.interleaved {
-                        let Some(record) = locked_reader.next() else {
-                            if i == 0 {
-                                break 'outer;
-                            }
-                            Err(Error::UnpairedRead(format!("\"{}\"", &**origin)))?
-                        };
-                        let record = record.map_err(|e| Error::ParseRecord {
-                            origin: (***origin).clone(),
-                            idx: idx + i,
-                            source: Box::new(e),
-                        })?;
-                        let name_opt = Some(record.id());
-                        let qual_opt = record.qual();
-                        curr_read.add_fastq_parts(
-                            (i + 1) as _,
-                            name_opt,
-                            &record.seq(),
-                            qual_opt,
-                            Arc::clone(origin),
-                            idx + i,
-                        );
-                    }
-                } else {
-                    // gather records from multiple different files
-                    for (i, (locked_reader, origin)) in locked_readers.iter_mut().enumerate() {
-                        let Some(record) = locked_reader.next() else {
-                            if i == 0 {
-                                break 'outer;
-                            }
-                            Err(Error::UnpairedRead(format!("\"{}\"", &**origin)))?
-                        };
-                        let record = record.map_err(|e| Error::ParseRecord {
-                            origin: (***origin).clone(),
-                            idx,
-                            source: Box::new(e),
-                        })?;
-                        let name_opt = Some(record.id());
-                        let qual_opt = record.qual();
-                        curr_read.add_fastq_parts(
-                            (i + 1) as _,
-                            name_opt,
-                            &record.seq(),
-                            qual_opt,
-                            Arc::clone(origin),
-                            idx,
-                        );
-                    }
+                if i >= b.len() {
+                    b.push(Read::new());
                 }
+                let curr_read = &mut b[i];
+                // Removed curr_read.clear() to allow recycling
 
-                b.push_back(curr_read);
+                let mut slot_idx = 0;
+                for j in 0..self.interleaved {
+                    let Some(record) = locked_reader.next() else {
+                        if j == 0 {
+                            b.truncate(i); // Remove unused reads at the end
+                            break 'outer;
+                        }
+                        Err(Error::UnpairedRead(format!("\"{}\"", &**origin)))?
+                    };
+                    let record = record.map_err(|e| Error::ParseRecord {
+                        origin: (***origin).clone(),
+                        idx: idx + j,
+                        source: Box::new(e),
+                    })?;
+                    
+                    curr_read.set_fastq_entry(
+                        slot_idx,
+                        StrType::Name((j + 1) as _),
+                        record.id(),
+                        None,
+                        Arc::clone(origin),
+                        idx + j,
+                    );
+                    slot_idx += 1;
+                    
+                    curr_read.set_fastq_entry(
+                        slot_idx,
+                        StrType::Seq((j + 1) as _),
+                        &record.seq(),
+                        record.qual(),
+                        Arc::clone(origin),
+                        idx + j,
+                    );
+                    slot_idx += 1;
+                }
+            } else {
+                // gather records from multiple different files
+                if i >= b.len() {
+                    b.push(Read::new());
+                }
+                let curr_read = &mut b[i];
+                // Removed curr_read.clear()
+
+                let mut slot_idx = 0;
+                for (j, (locked_reader, origin)) in locked_readers.iter_mut().enumerate() {
+                    let Some(record) = locked_reader.next() else {
+                        if j == 0 {
+                            b.truncate(i);
+                            break 'outer;
+                        }
+                        Err(Error::UnpairedRead(format!("\"{}\"", &**origin)))?
+                    };
+                    let record = record.map_err(|e| Error::ParseRecord {
+                        origin: (***origin).clone(),
+                        idx,
+                        source: Box::new(e),
+                    })?;
+                    
+                    curr_read.set_fastq_entry(
+                        slot_idx,
+                        StrType::Name((j + 1) as _),
+                        record.id(),
+                        None,
+                        Arc::clone(origin),
+                        idx,
+                    );
+                    slot_idx += 1;
+                    
+                    curr_read.set_fastq_entry(
+                        slot_idx,
+                        StrType::Seq((j + 1) as _),
+                        &record.seq(),
+                        record.qual(),
+                        Arc::clone(origin),
+                        idx,
+                    );
+                    slot_idx += 1;
+                }
             }
+            i += 1;
+        }
+        
+        if b.len() > i {
+            b.truncate(i);
         }
 
         if b.is_empty() {
             return Ok((None, true));
         }
 
-        let res = b.pop_front();
-        trace.add(<Self as GraphNode<T>>::name(self), start, &res);
-        Ok((res, false))
+        let res_opt = Some(b);
+        trace.add(<Self as GraphNode<T>>::name(self), start, &res_opt);
+        Ok((res_opt, false))
     }
 
     fn required_names(&self) -> &[LabelOrAttr] {

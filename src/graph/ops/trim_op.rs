@@ -23,17 +23,19 @@ impl TrimOp {
 }
 
 impl<T: Trace> GraphNode<T> for TrimOp {
-    fn run_inner(&self, mut read: Read) -> Result<(Option<Read>, bool)> {
-        self.labels
-            .iter()
-            .try_for_each(|l| read.trim(l.str_type, l.label))
-            .map_err(|e| Error::NameError {
-                source: e,
-                read: read.clone(),
-                context: Self::NAME,
-            })?;
+    fn run_inner(&self, mut reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
+        for read in &mut reads {
+            self.labels
+                .iter()
+                .try_for_each(|l| read.trim(l.str_type, l.label))
+                .map_err(|e| Error::NameError {
+                    source: e,
+                    read: read.clone(),
+                    context: Self::NAME,
+                })?;
+        }
 
-        Ok((Some(read), false))
+        Ok((Some(reads), false))
     }
 
     fn required_names(&self) -> &[LabelOrAttr] {

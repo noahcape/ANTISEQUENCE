@@ -1059,7 +1059,15 @@ macro_rules! impl_expect_type {
     };
 }
 
-impl_expect_type!(expect_bool, bool, EvalData::Bool(v), v, "bool");
+fn expect_bool<'a>(d: EvalData<'a>) -> std::result::Result<bool, NameError> {
+    match d {
+        EvalData::Bool(v) => Ok(v),
+        EvalData::Bytes(v) => Ok(v.as_ref() != b"false" && !v.is_empty()),
+        _ => Err(NameError::Type("bool", vec![d.into()])),
+    }
+}
+
+// impl_expect_type!(expect_bool, bool, EvalData::Bool(v), v, "bool");
 impl_expect_type!(expect_int, isize, EvalData::Int(v), v, "int");
 //impl_expect_type!(expect_float, f64, EvalData::Float(v), v, "float");
 impl_expect_type!(expect_bytes, Cow<'a, [u8]>, EvalData::Bytes(v), v, "bytes");

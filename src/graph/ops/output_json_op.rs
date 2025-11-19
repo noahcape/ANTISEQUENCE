@@ -44,13 +44,15 @@ impl<'writer> OutputJsonOp<'writer> {
 }
 
 impl<'writer, T: Trace> GraphNode<T> for OutputJsonOp<'writer> {
-    fn run_inner(&self, read: Read) -> Result<(Option<Read>, bool)> {
+    fn run_inner(&self, reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
         let mut writer = self.writer.lock().unwrap();
-        serde_json::to_writer(&mut *writer, &SerializableRead::from(&read))
-            .map_err(|e| Error::BytesIo(Box::new(e)))?;
-        writeln!(&mut *writer).map_err(|e| Error::BytesIo(Box::new(e)))?;
+        for read in &reads {
+            serde_json::to_writer(&mut *writer, &SerializableRead::from(read))
+                .map_err(|e| Error::BytesIo(Box::new(e)))?;
+            writeln!(&mut *writer).map_err(|e| Error::BytesIo(Box::new(e)))?;
+        }
 
-        Ok((Some(read), false))
+        Ok((Some(reads), false))
     }
 
     fn required_names(&self) -> &[LabelOrAttr] {

@@ -32,20 +32,22 @@ impl IntersectOp {
 }
 
 impl<T: Trace> GraphNode<T> for IntersectOp {
-    fn run_inner(&self, mut read: Read) -> Result<(Option<Read>, bool)> {
-        read.intersect(
-            self.label1.str_type,
-            self.label1.label,
-            self.label2.label,
-            self.new_label.as_ref().map(|l| l.label),
-        )
-        .map_err(|e| Error::NameError {
-            source: e,
-            read: read.clone(),
-            context: Self::NAME,
-        })?;
+    fn run_inner(&self, mut reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
+        for read in &mut reads {
+            read.intersect(
+                self.label1.str_type,
+                self.label1.label,
+                self.label2.label,
+                self.new_label.as_ref().map(|l| l.label),
+            )
+            .map_err(|e| Error::NameError {
+                source: e,
+                read: read.clone(),
+                context: Self::NAME,
+            })?;
+        }
 
-        Ok((Some(read), false))
+        Ok((Some(reads), false))
     }
 
     fn required_names(&self) -> &[LabelOrAttr] {
@@ -92,20 +94,22 @@ impl UnionOp {
 }
 
 impl<T: Trace> GraphNode<T> for UnionOp {
-    fn run_inner(&self, mut read: Read) -> Result<(Option<Read>, bool)> {
-        read.union(
-            self.label1.str_type,
-            self.label1.label,
-            self.label2.label,
-            self.new_label.as_ref().map(|l| l.label),
-        )
-        .map_err(|e| Error::NameError {
-            source: e,
-            read: read.clone(),
-            context: Self::NAME,
-        })?;
+    fn run_inner(&self, mut reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
+        for read in &mut reads {
+            read.union(
+                self.label1.str_type,
+                self.label1.label,
+                self.label2.label,
+                self.new_label.as_ref().map(|l| l.label),
+            )
+            .map_err(|e| Error::NameError {
+                source: e,
+                read: read.clone(),
+                context: Self::NAME,
+            })?;
+        }
 
-        Ok((Some(read), false))
+        Ok((Some(reads), false))
     }
 
     fn required_names(&self) -> &[LabelOrAttr] {

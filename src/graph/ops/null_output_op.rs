@@ -11,8 +11,8 @@ impl NullOutputOp {
 }
 
 impl<T: Trace> GraphNode<T> for NullOutputOp {
-    fn run_inner(&self, read: Read) -> Result<(Option<Read>, bool)> {
-        Ok((Some(read), false))
+    fn run_inner(&self, reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
+        Ok((Some(reads), false))
     }
 
     fn required_names(&self) -> &[LabelOrAttr] {

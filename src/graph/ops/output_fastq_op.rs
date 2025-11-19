@@ -4,18 +4,18 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::borrow::Cow;
 use parking_lot::Mutex;
+use std::cell::RefCell;
 
 use rustc_hash::FxHashMap;
+use thread_local::ThreadLocal;
 
 use flate2::{write::GzEncoder, Compression};
 
 use crate::graph::*;
 
-struct BufState { buf: Vec<u8>, count: usize }
-
 struct TlsOutputState {
     writers: FxHashMap<Vec<u8>, Arc<Mutex<dyn Write + Send>>>,
-    bufs: FxHashMap<Vec<u8>, BufState>,
+    bufs: FxHashMap<Vec<u8>, Vec<u8>>,
 }
 
 impl TlsOutputState {
@@ -24,14 +24,12 @@ impl TlsOutputState {
 
 impl Drop for TlsOutputState {
     fn drop(&mut self) {
-        for (k, bs) in self.bufs.iter_mut() {
-            if bs.buf.is_empty() { continue; }
+        for (k, buf) in self.bufs.iter_mut() {
+            if buf.is_empty() { continue; }
             if let Some(w) = self.writers.get(k) {
                 let mut w = w.lock();
-                let _ = (&mut *w).write_all(&bs.buf);
-                let _ = (&mut *w).flush();
-                bs.buf.clear();
-                bs.count = 0;
+                let _ = (&mut *w).write_all(buf);
+                buf.clear();
             }
         }
     }
@@ -137,21 +135,6 @@ impl OutputFastqFileOp {
             }
         }
     }
-
-    fn get_cached_writer(&self, file_name: &[u8]) -> std::io::Result<Arc<Mutex<dyn Write + Send>>> {
-        // if TLS is disabled, just create a new writer
-        if writer_tls_disabled() { 
-            return self.get_writer(file_name); 
-        }
-        // otherwise, try to get the writer from TLS
-        if let Some(w) = OUTPUT_TLS.with(|m| m.borrow().writers.get(file_name).map(Arc::clone)) { return Ok(w); }
-        // if not found, create a new writer and cache it
-        let w = self.get_writer(file_name)?; 
-        OUTPUT_TLS.with(|m| { 
-            m.borrow_mut().writers.insert(file_name.to_vec(), Arc::clone(&w)); 
-        });
-        Ok(w)
-    }
 }
 
 #[inline(always)]
@@ -165,86 +148,69 @@ fn stub_output() -> bool {
     })
 }
 
-#[inline(always)]
-fn writer_tls_disabled() -> bool {
-    static DIS: OnceLock<bool> = OnceLock::new();
-    *DIS.get_or_init(|| {
-        std::env::var("ANTISEQ_DISABLE_OUTPUT_TLS")
-            .ok()
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-    })
-}
-
-#[inline(always)]
-fn output_batch_size() -> Option<usize> {
-    static BSZ: OnceLock<Option<usize>> = OnceLock::new();
-    *BSZ.get_or_init(|| {
-        std::env::var("ANTISEQ_OUTPUT_BATCH").ok()
-            .and_then(|s| s.trim().parse::<usize>().ok())
-            .and_then(|n| if n > 0 { Some(n) } else { None })
-    })
-}
-
 impl<T: Trace> GraphNode<T> for OutputFastqFileOp {
-    fn run_inner(&self, read: Read) -> Result<(Option<Read>, bool)> {
-        if stub_output() { return Ok((Some(read), false)); }
-        for (i, file_expr) in self.file_exprs.iter().enumerate() {
-            let file_name: Cow<[u8]> = if let Some(c) = self.file_consts.get(i).and_then(|o| o.as_ref()) {
-                Cow::Borrowed(&c[..])
-            } else {
-                file_expr
-                    .eval_bytes(&read, false)
-                    .map_err(|e| Error::NameError {
-                        source: e,
-                        read: read.clone(),
-                        context: Self::NAME,
-                    })?
-            };
+    fn run_inner(&self, reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
+        if stub_output() { return Ok((Some(reads), false)); }
+        
+        OUTPUT_TLS.with(|tls| {
+            let mut state_borrow = tls.borrow_mut();
+            let TlsOutputState { writers, bufs } = &mut *state_borrow;
+            
+            for read in &reads {
+                for (i, file_expr) in self.file_exprs.iter().enumerate() {
+                    let file_name: Cow<[u8]> = if let Some(c) = self.file_consts.get(i).and_then(|o| o.as_ref()) {
+                        Cow::Borrowed(&c[..])
+                    } else {
+                        file_expr
+                            .eval_bytes(read, false)
+                            .map_err(|e| Error::NameError {
+                                source: e,
+                                read: read.clone(),
+                                context: Self::NAME,
+                            })?
+                    };
 
-            let locked_writer = self.get_cached_writer(&file_name).map_err(|e| Error::FileIo { file: utf8(&file_name), source: Box::new(e) })?;
-
-            let record = read.to_fastq((i + 1) as _).map_err(|e| Error::NameError { source: e, read: read.clone(), context: Self::NAME })?;
-
-            if let Some(n) = output_batch_size() {
-                let (name, seq, qual) = record;
-                let mut tmp = Vec::with_capacity(1 + name.len() + 1 + seq.len() + 2 + 1 + qual.len() + 1);
-                tmp.push(b'@'); tmp.extend_from_slice(name); tmp.push(b'\n');
-                tmp.extend_from_slice(seq); tmp.push(b'\n'); tmp.push(b'+'); tmp.push(b'\n');
-                tmp.extend_from_slice(qual); tmp.push(b'\n');
-
-                let key = file_name.to_vec();
-                let mut flush_needed = false;
-                OUTPUT_TLS.with(|m| {
-                    let mut s = m.borrow_mut();
-                    let bs = s.bufs.entry(key.clone()).or_insert_with(|| BufState { buf: Vec::new(), count: 0 });
-                    bs.buf.extend_from_slice(&tmp);
-                    bs.count += 1;
-                    if bs.count >= n { flush_needed = true; }
-                });
-
-                if flush_needed {
-                    let mut to_write = Vec::new();
-                    OUTPUT_TLS.with(|m| {
-                        let mut s = m.borrow_mut();
-                        if let Some(bs) = s.bufs.get_mut(&key) {
-                            to_write = std::mem::take(&mut bs.buf);
-                            bs.count = 0;
-                        }
-                    });
-                    if !to_write.is_empty() {
-                        let mut w = locked_writer.lock();
-                        (&mut *w).write_all(&to_write).map_err(|e| Error::FileIo { file: utf8(&file_name), source: Box::new(e) })?;
-                        (&mut *w).flush().map_err(|e| Error::FileIo { file: utf8(&file_name), source: Box::new(e) })?;
-                    }
+                    let record = read.to_fastq((i + 1) as _).map_err(|e| Error::NameError { source: e, read: read.clone(), context: Self::NAME })?;
+                    
+                    let buf = if let Some(buf) = bufs.get_mut(&*file_name) {
+                        buf
+                    } else {
+                        bufs.entry(file_name.into_owned()).or_default()
+                    };
+                    
+                    let (name, seq, qual) = record;
+                    buf.reserve(1 + name.len() + 1 + seq.len() + 3 + qual.len() + 1);
+                    buf.push(b'@'); buf.extend_from_slice(name); buf.push(b'\n');
+                    buf.extend_from_slice(seq); buf.push(b'\n');
+                    buf.extend_from_slice(b"+\n");
+                    buf.extend_from_slice(qual); buf.push(b'\n');
                 }
-            } else {
-                let mut writer = locked_writer.lock();
-                write_fastq_record(&mut *writer, record);
             }
-        }
 
-        Ok((Some(read), false))
+            // Flush buffers
+            for (file_name, buf) in bufs.iter_mut() {
+                if buf.is_empty() { continue; }
+                
+                let writer = if let Some(w) = writers.get(file_name) {
+                    Arc::clone(w)
+                } else {
+                    let w = self.get_writer(file_name).map_err(|e| Error::FileIo { file: utf8(file_name), source: Box::new(e) })?;
+                    writers.insert(file_name.clone(), Arc::clone(&w));
+                    w
+                };
+                
+                let mut w = writer.lock();
+                w.write_all(buf).map_err(|e| Error::FileIo { file: utf8(file_name), source: Box::new(e) })?;
+                
+                buf.clear();
+            }
+            
+            Ok::<(), Error>(())
+        }).map_err(|e| e)?; // Extract result from with() which returns whatever closure returns.
+        // Wait, `with` returns R. My closure returns Result<(), Error>.
+        // So map_err is correct if I propagate it.
+
+        Ok((Some(reads), false))
     }
 
     fn required_names(&self) -> &[LabelOrAttr] {
@@ -258,6 +224,7 @@ impl<T: Trace> GraphNode<T> for OutputFastqFileOp {
 
 pub struct OutputFastqOp<'writer> {
     writers: Vec<Mutex<Box<dyn Write + Send + 'writer>>>,
+    buffers: ThreadLocal<RefCell<Vec<Vec<u8>>>>,
 }
 
 impl<'writer> OutputFastqOp<'writer> {
@@ -267,6 +234,7 @@ impl<'writer> OutputFastqOp<'writer> {
     pub fn from_writer(writer: impl Write + Send + 'writer) -> Self {
         Self {
             writers: vec![Mutex::new(Box::new(writer))],
+            buffers: ThreadLocal::new(),
         }
     }
 
@@ -280,25 +248,43 @@ impl<'writer> OutputFastqOp<'writer> {
                     Mutex::new(w)
                 })
                 .collect(),
+            buffers: ThreadLocal::new(),
         }
     }
 }
 
 impl<'writer, T: Trace> GraphNode<T> for OutputFastqOp<'writer> {
-    fn run_inner(&self, read: Read) -> Result<(Option<Read>, bool)> {
-        if stub_output() { return Ok((Some(read), false)); }
-        for (i, writer) in self.writers.iter().enumerate() {
-            let record = read.to_fastq((i + 1) as _).map_err(|e| Error::NameError {
-                source: e,
-                read: read.clone(),
-                context: Self::NAME,
-            })?;
-
-            let mut writer = writer.lock();
-            write_fastq_record(&mut *writer, record);
+    fn run_inner(&self, reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
+        if stub_output() { return Ok((Some(reads), false)); }
+        
+        let mut buffers = self.buffers.get_or(|| RefCell::new(vec![Vec::new(); self.writers.len()])).borrow_mut();
+        
+        for read in &reads {
+            for (i, buf) in buffers.iter_mut().enumerate() {
+                let record = read.to_fastq((i + 1) as _).map_err(|e| Error::NameError {
+                    source: e,
+                    read: read.clone(),
+                    context: Self::NAME,
+                })?;
+                
+                let (name, seq, qual) = record;
+                buf.reserve(1 + name.len() + 1 + seq.len() + 3 + qual.len() + 1);
+                buf.push(b'@'); buf.extend_from_slice(name); buf.push(b'\n');
+                buf.extend_from_slice(seq); buf.push(b'\n');
+                buf.extend_from_slice(b"+\n");
+                buf.extend_from_slice(qual); buf.push(b'\n');
+            }
+        }
+        
+        for (i, buf) in buffers.iter_mut().enumerate() {
+             if !buf.is_empty() {
+                 let mut writer = self.writers[i].lock();
+                 writer.write_all(buf).unwrap(); // TODO: proper error handling
+                 buf.clear();
+             }
         }
 
-        Ok((Some(read), false))
+        Ok((Some(reads), false))
     }
 
     fn required_names(&self) -> &[LabelOrAttr] {

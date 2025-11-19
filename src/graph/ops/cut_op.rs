@@ -34,27 +34,29 @@ impl CutOp {
 }
 
 impl<T: Trace> GraphNode<T> for CutOp {
-    fn run_inner(&self, mut read: Read) -> Result<(Option<Read>, bool)> {
-        let cut_idx = self.cut_idx.eval_int(&read).map_err(|e| Error::NameError {
-            source: e,
-            read: read.clone(),
-            context: Self::NAME,
-        })?;
+    fn run_inner(&self, mut reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
+        for read in &mut reads {
+            let cut_idx = self.cut_idx.eval_int(&read).map_err(|e| Error::NameError {
+                source: e,
+                read: read.clone(),
+                context: Self::NAME,
+            })?;
 
-        read.cut(
-            self.cut_label.str_type,
-            self.cut_label.label,
-            self.new_label1.as_ref().map(|l| l.label),
-            self.new_label2.as_ref().map(|l| l.label),
-            cut_idx,
-        )
-        .map_err(|e| Error::NameError {
-            source: e,
-            read: read.clone(),
-            context: Self::NAME,
-        })?;
+            read.cut(
+                self.cut_label.str_type,
+                self.cut_label.label,
+                self.new_label1.as_ref().map(|l| l.label),
+                self.new_label2.as_ref().map(|l| l.label),
+                cut_idx,
+            )
+            .map_err(|e| Error::NameError {
+                source: e,
+                read: read.clone(),
+                context: Self::NAME,
+            })?;
+        }
 
-        Ok((Some(read), false))
+        Ok((Some(reads), false))
     }
 
     fn required_names(&self) -> &[LabelOrAttr] {

@@ -41,49 +41,52 @@ impl MatchRegexOp {
 }
 
 impl<T: Trace> GraphNode<T> for MatchRegexOp {
-    fn run_inner(&self, mut read: Read) -> Result<(Option<Read>, bool)> {
+    fn run_inner(&self, mut reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
         let regex = self.regex_local.get_or(|| self.regex.clone());
         let cap_names = regex
             .capture_names()
             .filter_map(|name| name.map(|n| InlineString::new(n.as_bytes())))
             .collect::<Vec<_>>();
-        let mut new_mappings = Vec::new();
+        
+        for read in &mut reads {
+            let mut new_mappings = Vec::new();
 
-        let string = read
-            .substring(self.label.str_type, self.label.label)
-            .map_err(|e| Error::NameError {
-                source: e,
-                read: read.clone(),
-                context: Self::NAME,
-            })?;
-        let matched;
+            let string = read
+                .substring(self.label.str_type, self.label.label)
+                .map_err(|e| Error::NameError {
+                    source: e,
+                    read: read.clone(),
+                    context: Self::NAME,
+                })?;
+            let matched;
 
-        match regex.captures(string) {
-            Some(caps) => {
-                matched = true;
+            match regex.captures(string) {
+                Some(caps) => {
+                    matched = true;
 
-                new_mappings.extend(cap_names.iter().filter_map(|&name| {
-                    caps.name(name.as_str()).map(|m| (name, m.start(), m.len()))
-                }));
+                    new_mappings.extend(cap_names.iter().filter_map(|&name| {
+                        caps.name(name.as_str()).map(|m| (name, m.start(), m.len()))
+                    }));
+                }
+                None => matched = false,
             }
-            None => matched = false,
+
+            let str_mappings = read.str_mappings_mut(self.label.str_type).unwrap();
+            let offset = str_mappings.mapping(self.label.label).unwrap().start;
+
+            for (label, start, len) in new_mappings.drain(..) {
+                str_mappings.add_mapping(Some(label), offset + start, len);
+            }
+
+            if let Some(attr) = &self.attr {
+                // panic to make borrow checker happy
+                *read
+                    .data_mut(attr.str_type, attr.label, attr.attr)
+                    .unwrap_or_else(|e| panic!("Error in {}: {e}", Self::NAME)) = Data::Bool(matched);
+            }
         }
 
-        let str_mappings = read.str_mappings_mut(self.label.str_type).unwrap();
-        let offset = str_mappings.mapping(self.label.label).unwrap().start;
-
-        for (label, start, len) in new_mappings.drain(..) {
-            str_mappings.add_mapping(Some(label), offset + start, len);
-        }
-
-        if let Some(attr) = &self.attr {
-            // panic to make borrow checker happy
-            *read
-                .data_mut(attr.str_type, attr.label, attr.attr)
-                .unwrap_or_else(|e| panic!("Error in {}: {e}", Self::NAME)) = Data::Bool(matched);
-        }
-
-        Ok((Some(read), false))
+        Ok((Some(reads), false))
     }
 
     fn required_names(&self) -> &[LabelOrAttr] {

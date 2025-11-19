@@ -17,8 +17,8 @@ pub trait Trace: Send + Sync {
     type S;
 
     fn new(file_path: impl AsRef<Path>) -> Self;
-    fn start(&self, read: &Option<Read>) -> Self::S;
-    fn add(&self, name: &str, start: Self::S, read: &Option<Read>);
+    fn start(&self, reads: &Option<Vec<Read>>) -> Self::S;
+    fn add(&self, name: &str, start: Self::S, reads: &Option<Vec<Read>>);
     fn finish(self);
 }
 
@@ -46,19 +46,19 @@ impl Trace for TraceReads {
         }
     }
 
-    fn start(&self, read: &Option<Read>) -> Self::S {
+    fn start(&self, reads: &Option<Vec<Read>>) -> Self::S {
         (
             self.start.elapsed(),
             Instant::now(),
-            read.as_ref().map(|r| r.first_idx()),
+            reads.as_ref().and_then(|v| v.first()).map(|r| r.first_idx()),
         )
     }
 
-    fn add(&self, name: &str, start: Self::S, read: &Option<Read>) {
+    fn add(&self, name: &str, start: Self::S, reads: &Option<Vec<Read>>) {
         let start_us = (start.0.as_nanos() as f64) / 1000.0f64;
         let dur_us = (start.1.elapsed().as_nanos() as f64) / 1000.0f64;
-        let first_idx = read.as_ref().map(|r| r.first_idx()).or(start.2).unwrap();
-        let event = TraceEvent::new(name, start_us, dur_us, first_idx, read);
+        let first_idx = reads.as_ref().and_then(|v| v.first()).map(|r| r.first_idx()).or(start.2).unwrap();
+        let event = TraceEvent::new(name, start_us, dur_us, first_idx, reads);
         let mut writer = self.writer.lock().unwrap();
 
         if !writer.0 {
@@ -84,11 +84,11 @@ impl Trace for NoTrace {
         Self
     }
 
-    fn start(&self, _read: &Option<Read>) -> Self::S {
+    fn start(&self, _reads: &Option<Vec<Read>>) -> Self::S {
         ()
     }
 
-    fn add(&self, _name: &str, _start: Self::S, _read: &Option<Read>) {}
+    fn add(&self, _name: &str, _start: Self::S, _reads: &Option<Vec<Read>>) {}
     fn finish(self) {}
 }
 
@@ -118,7 +118,7 @@ struct Args {
 }
 
 impl<'a> TraceEvent<'a> {
-    pub fn new(name: &'a str, start: f64, dur: f64, tid: usize, read: &'a Option<Read>) -> Self {
+    pub fn new(name: &'a str, start: f64, dur: f64, tid: usize, reads: &'a Option<Vec<Read>>) -> Self {
         Self {
             name,
             ph: 'X',
@@ -127,7 +127,7 @@ impl<'a> TraceEvent<'a> {
             pid: 0,
             tid,
             args: Args {
-                read: read.as_ref().map(|r| SerializableRead::from(r)),
+                read: reads.as_ref().and_then(|v| v.first()).map(|r| SerializableRead::from(r)),
             },
         }
     }

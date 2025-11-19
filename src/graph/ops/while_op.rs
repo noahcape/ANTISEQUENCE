@@ -22,39 +22,55 @@ impl<T: Trace> WhileOp<T> {
 }
 
 impl<T: Trace> GraphNode<T> for WhileOp<T> {
-    fn run(&self, read: Option<Read>, trace: &T) -> Result<(Option<Read>, bool)> {
-        let start = trace.start(&read);
-        let Some(mut read) = read else {
-            panic!("Expected some read!")
+    fn run(&self, reads: Option<Vec<Read>>, trace: &T) -> Result<(Option<Vec<Read>>, bool)> {
+        let start = trace.start(&reads);
+        let Some(mut current_batch) = reads else {
+            panic!("Expected some reads!")
         };
 
-        while self
-            .cond_expr
-            .eval_bool(&read)
-            .map_err(|e| Error::NameError {
-                source: e,
-                read: read.clone(),
-                context: Self::NAME,
-            })?
-        {
-            let (r, done) = self.graph.run_one(Some(read), trace)?;
+        let mut final_results = Vec::with_capacity(current_batch.len());
+        let mut done_global = false;
 
-            if done {
-                trace.add(self.name(), start, &r);
-                return Ok((r, done));
+        // Loop until no reads are left to process
+        while !current_batch.is_empty() {
+            let mut passing_reads = Vec::with_capacity(current_batch.len());
+            let mut failing_reads = Vec::with_capacity(current_batch.len());
+
+            for read in current_batch {
+                if self.cond_expr.eval_bool(&read).map_err(|e| Error::NameError {
+                    source: e,
+                    read: read.clone(),
+                    context: Self::NAME,
+                })? {
+                    passing_reads.push(read);
+                } else {
+                    failing_reads.push(read);
+                }
             }
 
-            if let Some(r) = r {
-                read = r;
+            // Failing reads are done
+            final_results.extend(failing_reads);
+
+            if passing_reads.is_empty() {
+                break;
+            }
+
+            // Run passing reads
+            let (res_opt, done) = self.graph.run_one(Some(passing_reads), trace)?;
+            if done {
+                done_global = true;
+            }
+
+            if let Some(next_batch) = res_opt {
+                current_batch = next_batch;
             } else {
-                trace.add(self.name(), start, &r);
-                return Ok((r, done));
+                current_batch = Vec::new();
             }
         }
 
-        let read = Some(read);
-        trace.add(self.name(), start, &read);
-        Ok((read, false))
+        let res = if final_results.is_empty() { None } else { Some(final_results) };
+        trace.add(self.name(), start, &res);
+        Ok((res, done_global))
     }
 
     fn required_names(&self) -> &[LabelOrAttr] {
