@@ -18,6 +18,22 @@ pub struct Graph<T: Trace = NoTrace> {
     nodes: Vec<Arc<dyn GraphNode<T>>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct MatchDistanceCounts {
+    pub label: String,
+    pub counts: Vec<usize>,
+    pub total: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct InputStats {
+    pub n_fastqs: usize,
+    pub read_counts: Vec<usize>,
+    pub read_length_min: Vec<usize>,
+    pub read_length_max: Vec<usize>,
+    pub read_length_sum: Vec<usize>,
+}
+
 pub trait GraphNode<T: Trace = NoTrace>: Send + Sync {
     #[inline(always)]
     fn run(&self, reads: Option<Vec<Read>>, trace: &T) -> Result<(Option<Vec<Read>>, bool)> {
@@ -34,6 +50,20 @@ pub trait GraphNode<T: Trace = NoTrace>: Send + Sync {
     }
     fn required_names(&self) -> &[LabelOrAttr];
     fn name(&self) -> &'static str;
+
+    /// Optional hook for nodes that expose match distance statistics.
+    ///
+    /// Default implementation returns `None` so that most nodes do not need
+    /// to be aware of statistics collection.
+    #[inline]
+    fn match_distance_counts(&self) -> Option<MatchDistanceCounts> {
+        None
+    }
+
+    #[inline]
+    fn input_stats(&self) -> Option<InputStats> {
+        None
+    }
 }
 
 impl<T: Trace> Graph<T> {
@@ -104,6 +134,33 @@ impl<T: Trace> Graph<T> {
                 });
             }
         });
+    }
+
+    /// Collect per-node match distance histograms from all nodes that expose
+    /// them via `GraphNode::match_distance_counts`.
+    ///
+    /// Each entry corresponds to a single node instance and contains the label
+    /// name (e.g. "seq1.brc") and a vector of counts indexed by edit
+    /// distance (0, 1, 2, ...).
+    pub fn match_distance_counts(&self) -> Vec<MatchDistanceCounts> {
+        let mut out = Vec::new();
+        for node in &self.nodes {
+            if let Some(counts) = node.match_distance_counts() {
+                out.push(counts);
+            }
+        }
+        out
+    }
+
+    /// Collect input statistics from the first node that exposes them
+    /// via `GraphNode::input_stats` (typically the InputFastqOp).
+    pub fn input_stats(&self) -> Option<InputStats> {
+        for node in &self.nodes {
+            if let Some(stats) = node.input_stats() {
+                return Some(stats);
+            }
+        }
+        None
     }
 
     /// Run a single batch of reads through the graph.

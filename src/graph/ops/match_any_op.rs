@@ -8,6 +8,8 @@ use thread_local::*;
 
 use std::cell::RefCell;
 use std::marker::Send;
+use std::sync::RwLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::graph::*;
 use crate::inline_string::InlineString;
@@ -24,6 +26,11 @@ pub struct MatchAnyOp {
     match_type: MatchType,
     aligner: ThreadLocal<Option<RefCell<Box<dyn Aligner + Send>>>>,
     seed_searcher: Option<SeedSearchers>,
+    // Per-thread match-distance histograms; each thread stores counts by
+    // exact edit distance, and we aggregate across threads when queried.
+    distance_counts: ThreadLocal<RwLock<Vec<usize>>>,
+    // Total number of reads that reached this node (across all threads).
+    total_attempts: AtomicUsize,
 }
 
 impl MatchAnyOp {
@@ -77,6 +84,8 @@ impl MatchAnyOp {
             match_type,
             aligner: ThreadLocal::new(),
             seed_searcher,
+            distance_counts: ThreadLocal::new(),
+            total_attempts: AtomicUsize::new(0),
         }
     }
 
@@ -105,11 +114,34 @@ impl MatchAnyOp {
             Some(General(GeneralSearcher::new(patterns.iter_literals(), k)))
         }
     }
+
+    #[inline]
+    fn record_distance(&self, pattern_len: usize, matches: usize) {
+        if pattern_len == 0 {
+            return;
+        }
+        let distance = pattern_len.saturating_sub(matches);
+        let cell = self
+            .distance_counts
+            .get_or(|| RwLock::new(Vec::new()));
+        let mut counts = cell.write().unwrap();
+        if distance >= counts.len() {
+            counts.resize(distance + 1, 0);
+        }
+        counts[distance] += 1;
+    }
+
+    /// Human-readable label for statistics, e.g. "seq1.brc".
+    pub fn stats_label(&self) -> String {
+        format!("{}.{}", self.label.str_type, self.label.label)
+    }
 }
 
 impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
     fn run_inner(&self, mut reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
-        
+        // Count how many reads reach this node in this batch.
+        self.total_attempts.fetch_add(reads.len(), Ordering::Relaxed);
+
         // Access thread-local aligner once per batch
         use MatchType::*;
         let aligner_cell = self.aligner.get_or(|| {
@@ -221,6 +253,7 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
             }
 
             let mut max_matches = 0;
+            let mut max_pattern_len = 0;
             let mut max_pattern = None;
             let mut max_pattern_idx = std::usize::MAX;
             let mut max_cut_pos1 = 0;
@@ -386,6 +419,7 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                 if let Some((matches, cut_pos1, cut_pos2)) = matches {
                     if matches > max_matches {
                         max_matches = matches;
+                        max_pattern_len = pattern_len;
                         max_pattern = Some((pattern_str_cow, pattern.attrs()));
                         max_pattern_idx = pattern_idx;
                         max_cut_pos1 = cut_pos1;
@@ -398,6 +432,7 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
             }
 
             if let Some((pattern_str, pattern_attrs)) = max_pattern {
+                self.record_distance(max_pattern_len, max_matches);
                 let pattern_str = pattern_str.into_owned();
                 let mapping = read
                     .mapping_mut(self.label.str_type, self.label.label)
@@ -416,7 +451,6 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                     *mapping.data_mut(multimatch_name) = Data::Bytes(val);
                 }
 
-                use crate::inline_string::InlineString;
                 for (&attr, data) in self.patterns.attr_names().iter().zip(pattern_attrs) {
                     *mapping.data_mut(attr) = data.clone();
                 }
@@ -526,6 +560,31 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
 
     fn name(&self) -> &'static str {
         Self::NAME
+    }
+
+    fn match_distance_counts(&self) -> Option<MatchDistanceCounts> {
+        let mut totals: Vec<usize> = Vec::new();
+
+        for local in self.distance_counts.iter() {
+            let local = local.read().unwrap();
+            if local.len() > totals.len() {
+                totals.resize(local.len(), 0);
+            }
+            for (d, &count) in local.iter().enumerate() {
+                totals[d] += count;
+            }
+        }
+
+        // Trim trailing zeros to keep the internal representation compact.
+        while totals.last().copied() == Some(0) {
+            totals.pop();
+        }
+
+        Some(MatchDistanceCounts {
+            label: self.stats_label(),
+            counts: totals,
+            total: self.total_attempts.load(Ordering::Relaxed),
+        })
     }
 }
 
