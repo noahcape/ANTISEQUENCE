@@ -283,6 +283,8 @@ impl HashToPatternIdx {
 
         while contains > 0 {
             let i = contains.trailing_zeros() as usize;
+            contains &= contains - 1;
+
             let hash = hashes[i];
             let Some(&(start, end)) = self.map.get(&hash) else {
                 continue;
@@ -295,8 +297,6 @@ impl HashToPatternIdx {
                     pattern_i: pattern_i as usize,
                 });
             }
-
-            contains &= contains - 1;
         }
     }
 }

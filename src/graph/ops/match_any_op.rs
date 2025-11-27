@@ -140,7 +140,8 @@ impl MatchAnyOp {
 impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
     fn run_inner(&self, mut reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
         // Count how many reads reach this node in this batch.
-        self.total_attempts.fetch_add(reads.len(), Ordering::Relaxed);
+        self.total_attempts
+            .fetch_add(reads.len(), Ordering::Relaxed);
 
         // Access thread-local aligner once per batch
         use MatchType::*;
@@ -174,6 +175,7 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
         };
 
         for read in &mut reads {
+
             let text = read
                 .substring(self.label.str_type, self.label.label)
                 .map_err(|e| Error::NameError {

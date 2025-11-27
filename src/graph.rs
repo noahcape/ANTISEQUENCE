@@ -98,11 +98,11 @@ impl<T: Trace> Graph<T> {
         loop {
             // Pass next_input to recycle the vector
             let (out, done) = self.run_one(next_input, trace)?;
-            
+
             // Recycle output vector for next input, but DO NOT clear.
             // We let InputFastqOp handle the clearing/recycling logic to reuse Read internal buffers.
             next_input = out;
-            
+
             if done {
                 break;
             }
@@ -128,9 +128,9 @@ impl<T: Trace> Graph<T> {
 
         thread::scope(|s| {
             for _ in 0..threads {
-                s.spawn(|| {
+                s.spawn(move || {
                     self.run_trace_inner(&trace)
-                        .unwrap_or_else(|e| panic!("{e}"))
+                        .unwrap_or_else(|e| panic!("{e}"));
                 });
             }
         });

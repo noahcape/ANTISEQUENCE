@@ -165,7 +165,6 @@ impl<'reader> InputFastqOp<'reader> {
 impl<'reader, T: Trace> GraphNode<T> for InputFastqOp<'reader> {
     fn run(&self, reads: Option<Vec<Read>>, trace: &T) -> Result<(Option<Vec<Read>>, bool)> {
         let start = trace.start(&reads);
-        
         let cs = chunk_size();
         let mut b = reads.unwrap_or_else(|| Vec::with_capacity(cs));
         // Do NOT clear b here, we want to reuse its elements.
