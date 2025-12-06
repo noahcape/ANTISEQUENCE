@@ -62,3 +62,6 @@ pub use try_op::*;
 
 mod while_op;
 pub use while_op::*;
+
+mod lookup_op;
+pub use lookup_op::*;
