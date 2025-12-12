@@ -22,7 +22,7 @@
 //!
 //! ## Reads
 //! Here's an example fastq record:
-//! ```
+//! ```text
 //! @read6
 //! AATTCCGGAATTCCCAAAAG
 //! +
@@ -31,7 +31,7 @@
 //! The first, second, and fourth lines are the name, sequence, and quality scores, respectively.
 //!
 //! ANTISEQUENCE stores that record as an internal [`Read`] data structure:
-//! ```
+//! ```text
 //! name1:
 //!  *     |---|
 //!  str:  read6
