@@ -340,19 +340,24 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                         }
                     }
                     HammingSearch(t) => {
-                        let (text_start, text_end) = if let Some(text_i) = text_i {
-                            (
-                                text_i.max(0) as usize,
-                                text.len().min((text_i + (pattern_len as isize)) as usize),
-                            )
-                        } else {
-                            (0, text.len())
-                        };
-                        let text_around = &text[text_start..text_end];
                         let t = t.get(pattern_len);
-                        hamming_search(text_around, pattern_str, t).map(|(m, start_idx, end_idx)| {
-                            (m, text_start + start_idx, text_start + end_idx)
-                        })
+                        if let Some(text_i) = text_i {
+                            // Seed hit gives us the exact position - just check that position
+                            let text_start = text_i.max(0) as usize;
+                            let text_end = text.len().min(text_start + pattern_len);
+                            if text_end - text_start == pattern_len {
+                                let text_slice = &text[text_start..text_end];
+                                hamming(text_slice, pattern_str, t)
+                                    .map(|m| (m, text_start, text_end))
+                            } else {
+                                None
+                            }
+                        } else {
+                            // No seed hit - fall back to full search
+                            hamming_search(text, pattern_str, t).map(|(m, start_idx, end_idx)| {
+                                (m, start_idx, end_idx)
+                            })
+                        }
                     }
                     HammingBoundedMatch {
                         threshold: t,
