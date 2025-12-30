@@ -365,8 +365,10 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                         to,
                     } => {
                         let t = t.get(pattern_len);
-                        let to = text.len().min(to);
-                        let text_around = &text[from..=to];
+                        // Use exclusive range - to is the max position, so we need to+1 for the slice
+                        // but capped at text.len()
+                        let to_exclusive = text.len().min(to + 1);
+                        let text_around = &text[from..to_exclusive];
                         hamming_search(text_around, pattern_str, t)
                             .map(|(m, start_idx, end_idx)| (m, from + start_idx, from + end_idx))
                     }
