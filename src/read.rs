@@ -25,6 +25,11 @@ pub enum End {
 /// Each Read contains multiple different strings of different types.
 ///
 /// Uses 1-indexed conventions, like Name(1) and Seq(1), to follow fastq file naming conventions.
+///
+/// # Example
+/// * `Name(1)` - The identifier line of the first read in a pair (or single read).
+/// * `Seq(1)` - The sequence line of the first read.
+/// * `Name(2)` - The identifier line of the second read in a pair.
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub enum StrType {
     Name(u8),
@@ -34,15 +39,22 @@ pub enum StrType {
 /// A fastq read.
 ///
 /// This is the core data structure that is manipulated by other operations in this library.
-/// Both fastq records for paired-end reads are stored in the same `Read`.
+/// Both fastq records for paired-end reads are stored in the same `Read` struct.
+///
+/// It acts as a container for `StrMappings`, which hold the actual sequence/name data and their label mappings.
 #[derive(Debug, Clone)]
 pub struct Read {
     str_mappings: Vec<(StrType, StrMappings)>,
 }
 
-/// A string and its correspondings mappings.
+/// A string and its corresponding mappings.
 ///
-/// This is typically used to represent a name or sequence from a fastq record.
+/// This structure holds the raw byte content (string) and quality scores (qual) for a specific part of a read
+/// (e.g., the sequence of Read 1). It also manages a list of `Mapping`s, which define labeled regions within this string.
+///
+/// # Recycling
+/// `StrMappings` supports recycling of its internal buffers (`string` and `qual`) to minimize allocations
+/// when processing millions of reads. See `recycle` and `recycle_with_qual`.
 #[derive(Debug, Clone)]
 pub struct StrMappings {
     mappings: SmallVec<[Mapping; 4]>,
@@ -275,33 +287,18 @@ impl StrMappings {
 
         if new_len == old_len {
             if new_len != 0 {
-                unsafe {
-                    std::ptr::copy(
-                        src_bytes.as_ref().as_ptr(),
-                        self.string.as_mut_ptr().add(start),
-                        new_len,
-                    );
-                }
+                self.string[start..start + new_len].copy_from_slice(&src_bytes);
             }
         } else if new_len < old_len {
             // write new bytes, then shift tail left and truncate
             if new_len != 0 {
-                unsafe {
-                    std::ptr::copy(
-                        src_bytes.as_ref().as_ptr(),
-                        self.string.as_mut_ptr().add(start),
-                        new_len,
-                    );
-                }
+                self.string[start..start + new_len].copy_from_slice(&src_bytes);
             }
             let tail_src = start + old_len;
             let tail_dst = start + new_len;
             let tail_len = self.string.len() - tail_src;
             if tail_len > 0 {
-                unsafe {
-                    let base = self.string.as_mut_ptr();
-                    std::ptr::copy(base.add(tail_src), base.add(tail_dst), tail_len);
-                }
+                self.string.copy_within(tail_src..tail_src + tail_len, tail_dst);
             }
             self.string.truncate(self.string.len() - (old_len - new_len));
         } else {
@@ -313,23 +310,11 @@ impl StrMappings {
             self.string.reserve(diff);
             self.string.resize(orig_len + diff, 0);
             if tail_len > 0 {
-                unsafe {
-                    let base = self.string.as_mut_ptr();
-                    std::ptr::copy(
-                        base.add(tail_src),
-                        base.add(tail_src + diff),
-                        tail_len,
-                    );
-                }
+                let tail_dst = tail_src + diff;
+                self.string.copy_within(tail_src..tail_src + tail_len, tail_dst);
             }
             if new_len != 0 {
-                unsafe {
-                    std::ptr::copy(
-                        src_bytes.as_ref().as_ptr(),
-                        self.string.as_mut_ptr().add(start),
-                        new_len,
-                    );
-                }
+                self.string[start..start + new_len].copy_from_slice(&src_bytes);
             }
         }
 
@@ -349,32 +334,17 @@ impl StrMappings {
 
             if q_new_len == old_len {
                 if q_new_len != 0 {
-                    unsafe {
-                        std::ptr::copy(
-                            q_bytes.as_ref().as_ptr(),
-                            qual_vec.as_mut_ptr().add(start),
-                            q_new_len,
-                        );
-                    }
+                    qual_vec[start..start + q_new_len].copy_from_slice(&q_bytes);
                 }
             } else if q_new_len < old_len {
                 if q_new_len != 0 {
-                    unsafe {
-                        std::ptr::copy(
-                            q_bytes.as_ref().as_ptr(),
-                            qual_vec.as_mut_ptr().add(start),
-                            q_new_len,
-                        );
-                    }
+                    qual_vec[start..start + q_new_len].copy_from_slice(&q_bytes);
                 }
                 let tail_src = start + old_len;
                 let tail_dst = start + q_new_len;
                 let tail_len = qual_vec.len() - tail_src;
                 if tail_len > 0 {
-                    unsafe {
-                        let base = qual_vec.as_mut_ptr();
-                        std::ptr::copy(base.add(tail_src), base.add(tail_dst), tail_len);
-                    }
+                    qual_vec.copy_within(tail_src..tail_src + tail_len, tail_dst);
                 }
                 qual_vec.truncate(qual_vec.len() - (old_len - q_new_len));
             } else {
@@ -385,23 +355,11 @@ impl StrMappings {
                 qual_vec.reserve(diff);
                 qual_vec.resize(orig_len + diff, 0);
                 if tail_len > 0 {
-                    unsafe {
-                        let base = qual_vec.as_mut_ptr();
-                        std::ptr::copy(
-                            base.add(tail_src),
-                            base.add(tail_src + diff),
-                            tail_len,
-                        );
-                    }
+                    let tail_dst = tail_src + diff;
+                    qual_vec.copy_within(tail_src..tail_src + tail_len, tail_dst);
                 }
                 if q_new_len != 0 {
-                    unsafe {
-                        std::ptr::copy(
-                            q_bytes.as_ref().as_ptr(),
-                            qual_vec.as_mut_ptr().add(start),
-                            q_new_len,
-                        );
-                    }
+                    qual_vec[start..start + q_new_len].copy_from_slice(&q_bytes);
                 }
             }
         }
@@ -448,20 +406,14 @@ impl StrMappings {
         let tail_src = start + len;
         let tail_len = self.string.len() - tail_src;
         if tail_len > 0 {
-            unsafe {
-                let base = self.string.as_mut_ptr();
-                std::ptr::copy(base.add(tail_src), base.add(start), tail_len);
-            }
+            self.string.copy_within(tail_src..tail_src + tail_len, start);
         }
         self.string.truncate(self.string.len() - len);
 
         if let Some(qual_vec) = &mut self.qual {
             let tail_len_q = qual_vec.len() - tail_src;
             if tail_len_q > 0 {
-                unsafe {
-                    let base = qual_vec.as_mut_ptr();
-                    std::ptr::copy(base.add(tail_src), base.add(start), tail_len_q);
-                }
+                qual_vec.copy_within(tail_src..tail_src + tail_len_q, start);
             }
             qual_vec.truncate(qual_vec.len() - len);
         }
@@ -474,6 +426,11 @@ impl StrMappings {
             .retain(|m| m.label.bytes().next() != Some(b'_'));
     }
 
+    /// Recycles this `StrMappings` object with new content.
+    ///
+    /// Clears existing mappings and replaces the underlying string buffer with `string`.
+    /// The `qual` buffer is cleared (set to None).
+    /// This is used by `InputFastqOp` to reuse memory from previous reads.
     pub fn recycle(&mut self, string: Vec<u8>, origin: Arc<Origin>, idx: usize) {
         self.mappings.clear();
         self.mappings.push(Mapping::new_default(string.len()));
@@ -483,6 +440,7 @@ impl StrMappings {
         self.idx = idx;
     }
 
+    /// Recycles this `StrMappings` object with new content and quality scores.
     pub fn recycle_with_qual(&mut self, string: Vec<u8>, qual: Vec<u8>, origin: Arc<Origin>, idx: usize) {
         self.mappings.clear();
         self.mappings.push(Mapping::new_default(string.len()));
@@ -494,15 +452,22 @@ impl StrMappings {
 }
 
 /// A labeled mapping that corresponds to an interval/region in a string.
+///
+/// Mappings allow assigning names (labels) to specific substrings (e.g., "barcode", "umi").
+/// They also support attaching arbitrary metadata attributes (`Data`) to these regions.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Mapping {
+    /// The label name (e.g., "barcode").
     pub label: InlineString,
+    /// Start index (0-based) in the parent `StrMappings` buffer.
     pub start: usize,
+    /// Length of the interval.
     pub len: usize,
+    /// Optional attributes associated with this mapping.
     data: Option<SmallAttrMap>,
 }
 
-/// Data types.
+/// Data types for attributes attached to mappings.
 #[derive(Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Data {
@@ -769,6 +734,11 @@ impl Read {
         self.str_mappings.push((StrType::Seq(str_type_idx), seq_sm));
     }
 
+    /// Adds a FASTQ record to the Read, attempting to recycle existing buffers if possible.
+    ///
+    /// If `self` already contains `StrMappings` for the given `str_type_idx` (lane),
+    /// it swaps out the internal buffers, clears them, copies the new data in, and calls `recycle`.
+    /// This avoids re-allocating `Vec<u8>` for the string and quality scores.
     pub fn add_fastq_recycled(
         &mut self,
         str_type_idx: u8,
@@ -871,6 +841,16 @@ impl Read {
         }
     }
 
+    /// Set a FASTQ entry (Name or Seq) at a specific slot index, optimizing for recycling.
+    ///
+    /// This method is designed for high-performance usage in `InputFastqOp` where we access
+    /// `str_mappings` by index to avoid searches.
+    ///
+    /// # Arguments
+    /// * `slot_idx` - The index in the `str_mappings` vector to write to.
+    /// * `str_type` - The type of string (Name or Seq).
+    /// * `string` - The sequence content.
+    /// * `qual` - Optional quality scores.
     pub fn set_fastq_entry(
         &mut self,
         slot_idx: usize,
@@ -881,6 +861,7 @@ impl Read {
         idx: usize
     ) {
         if slot_idx < self.str_mappings.len() {
+            // Recycling path: reuse existing buffer at slot_idx
             let (t, sm) = &mut self.str_mappings[slot_idx];
             *t = str_type;
             
@@ -897,6 +878,7 @@ impl Read {
                 sm.recycle(s, origin, idx);
             }
         } else {
+            // New allocation path
             let sm = if let Some(q) = qual {
                 StrMappings::new_with_qual(string.to_owned(), q.to_owned(), origin, idx)
             } else {

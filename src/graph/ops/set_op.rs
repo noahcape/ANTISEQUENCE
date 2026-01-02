@@ -1,5 +1,9 @@
 use crate::graph::*;
 
+/// Operation to set a label or attribute on a Read.
+///
+/// This operation evaluates an expression for each read and assigns the result to
+/// a specified label (modifying the sequence/quality) or attribute (metadata).
 pub struct SetOp {
     required_names: Vec<LabelOrAttr>,
     label_or_attr: LabelOrAttr,
@@ -27,7 +31,9 @@ impl SetOp {
         expr.optimize();
         let mut required_names = expr.required_names();
         match &label_or_attr {
+            // if label_or_attr is a label, we need to add it to required_names to ensure the label is present
             LabelOrAttr::Label(_) => required_names.push(label_or_attr.clone()),
+            // otherwise if label_or_attr is an attribute, we need to add the label it depends on to required_names
             LabelOrAttr::Attr(a) => required_names.push(LabelOrAttr::Label(Label {
                 str_type: a.str_type,
                 label: a.label,
@@ -43,10 +49,27 @@ impl SetOp {
 }
 
 impl<T: Trace> GraphNode<T> for SetOp {
+    /// Executes the Set operation on a batch of reads.
+    ///
+    /// This method iterates through the provided reads and modifies them based on the
+    /// configured target (`label_or_attr`) and expression.
+    ///
+    /// # Logic
+    /// * **If targeting a Label (Sequence/Quality):**
+    ///   1. Evaluates the expression to generate the new sequence bytes.
+    ///   2. If the read has quality scores, it re-evaluates the expression in "quality mode"
+    ///      to generate corresponding quality scores.
+    ///   3. Updates the read's sequence (and quality) at the specified label.
+    ///
+    /// * **If targeting an Attribute (Metadata):**
+    ///   1. Evaluates the expression to compute the new attribute value.
+    ///   2. Updates the read's metadata storage with this new value.
     fn run_inner(&self, mut reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
         for read in &mut reads {
             match &self.label_or_attr {
+                // Case 1: label_or_attr is a label
                 LabelOrAttr::Label(label) => {
+                    // Evaluate the expression to get the new byte sequence
                     let new_bytes = self
                         .expr
                         .eval_bytes(&read, false)
@@ -65,6 +88,9 @@ impl<T: Trace> GraphNode<T> for SetOp {
                                 context: Self::NAME,
                             })?;
 
+                    // If quality scores exist, evaluate the expression for quality scores as well
+                    // This generates corresponding quality scores for the new sequence
+                    // (e.g., if you concatenate two sequences, it concatenates their quality scores).
                     if str_mappings.qual().is_some() {
                         let new_qual = self
                             .expr
@@ -76,6 +102,7 @@ impl<T: Trace> GraphNode<T> for SetOp {
                             })?
                             .into_owned();
 
+                        // Update the read content (sequence and quality)
                         read.set(label.str_type, label.label, &new_bytes, Some(&new_qual))
                             .map_err(|e| Error::NameError {
                                 source: e,
@@ -83,6 +110,7 @@ impl<T: Trace> GraphNode<T> for SetOp {
                                 context: Self::NAME,
                             })?;
                     } else {
+                        // Update only the sequence content
                         read.set(label.str_type, label.label, &new_bytes, None)
                             .map_err(|e| Error::NameError {
                                 source: e,
@@ -92,12 +120,14 @@ impl<T: Trace> GraphNode<T> for SetOp {
                     }
                 }
                 LabelOrAttr::Attr(attr) => {
+                    // Evaluate expression for attribute value
                     let new_val = self.expr.eval(&read, false).map_err(|e| Error::NameError {
                         source: e,
                         read: read.clone(),
                         context: Self::NAME,
                     })?;
 
+                    // Update the attribute in the read's metadata
                     // panic to make borrow checker happy
                     *read
                         .data_mut(attr.str_type, attr.label, attr.attr)

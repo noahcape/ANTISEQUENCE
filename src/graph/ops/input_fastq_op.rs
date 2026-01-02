@@ -379,15 +379,8 @@ impl<'reader, T: Trace> GraphNode<T> for InputFastqOp<'reader> {
             b.truncate(i);
         }
 
-        // If batch is empty, we hit EOF immediately.
+        // If batch is empty, we hit EOF immediately. Were done!
         if b.is_empty() {
-            // Print final progress on EOF
-            if progress_enabled() {
-                let total = self.idx.load(Ordering::Relaxed);
-                if total > 0 {
-                    let _ = writeln!(std::io::stderr(), "[seqproc] Processed {} reads", total);
-                }
-            }
             return Ok((None, true));
         }
 

@@ -103,24 +103,21 @@ impl LookupOp {
 impl<T: Trace> GraphNode<T> for LookupOp {
     fn run_inner(&self, mut reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
         for read in &mut reads {
-            // Get the input sequence bytes and clone to avoid borrow issues
-            let input_bytes = match read.substring(self.input_label.str_type, self.input_label.label) {
-                Ok(bytes) => bytes.to_vec(),
-                Err(e) => {
-                    return Err(Error::NameError {
+            // Look up the value in the table
+            let output_value = {
+                let input_bytes = read
+                    .substring(self.input_label.str_type, self.input_label.label)
+                    .map_err(|e| Error::NameError {
                         source: e,
                         read: read.clone(),
                         context: Self::NAME,
-                    });
-                }
-            };
+                    })?;
 
-            // Look up the value in the table
-            let output_value = self
-                .lookup_table
-                .get(&input_bytes)
-                .cloned()
-                .unwrap_or_else(|| self.default_value.clone());
+                self.lookup_table
+                    .get(input_bytes)
+                    .cloned()
+                    .unwrap_or_else(|| self.default_value.clone())
+            };
 
             // Set the output attribute
             match read.data_mut(self.input_label.str_type, self.input_label.label, self.output_attr) {
