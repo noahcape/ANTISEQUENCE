@@ -3,6 +3,7 @@ use std::ops::RangeBounds;
 use std::path::Path;
 use std::sync::Arc;
 use std::thread;
+use std::sync::OnceLock;
 
 use crate::errors::*;
 use crate::expr::*;
@@ -169,6 +170,7 @@ impl<T: Trace> Graph<T> {
     /// the the operation is skipped.
     #[inline(always)]
     pub fn run_one(&self, mut curr: Option<Vec<Read>>, trace: &T) -> Result<(Option<Vec<Read>>, bool)> {
+        let trust = trust_required_checks();
         for node in &self.nodes {
             // If there is no current read, only the input node can produce one.
             if curr.is_none() {
@@ -177,6 +179,18 @@ impl<T: Trace> Graph<T> {
                 if done { return Ok((curr, done)); }
                 if curr.is_none() { break; }
                 continue;
+            }
+
+            // Skip nodes whose requirements are not satisfied, unless trusted.
+            // Heuristic: Check the first read as a representative.
+            if !trust && !node.required_names().is_empty() {
+                if let Some(reads) = &curr {
+                    if let Some(first) = reads.first() {
+                        if !first.has_names(node.required_names()) {
+                            continue;
+                        }
+                    }
+                }
             }
 
             // Call node.run so nodes that override run (and not run_inner) still work.
@@ -222,6 +236,17 @@ impl<T: Trace> Graph<T> {
 
         Ok((curr, false, false))
     }
+}
+
+#[inline(always)]
+fn trust_required_checks() -> bool {
+    static TRUST: OnceLock<bool> = OnceLock::new();
+    *TRUST.get_or_init(|| {
+        std::env::var("ANTISEQ_TRUST_NAMES")
+            .ok()
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    })
 }
 
 pub use MatchType::*;

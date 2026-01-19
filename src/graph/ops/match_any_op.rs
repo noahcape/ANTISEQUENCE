@@ -1,6 +1,6 @@
 use block_aligner::{cigar::*, scan_block::*, scores::*};
 
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashSet, FxHashMap};
 
 use memchr::memmem;
 
@@ -16,6 +16,91 @@ use crate::inline_string::InlineString;
 use crate::seed_search::*;
 use crate::Patterns;
 
+/// Pre-computed lookup table for fast Hamming matching.
+/// Stores substitution IDs as InlineString (Copy, stack-allocated) to avoid allocation.
+struct HammingLookup {
+    /// Maps encoded sequence -> substitution_id as InlineString (Copy type)
+    table: FxHashMap<u64, InlineString>,
+    /// Pattern length (all patterns must be same length)
+    pattern_len: usize,
+}
+
+impl HammingLookup {
+    const NUCLEOTIDES: [u8; 4] = [b'A', b'C', b'G', b'T'];
+
+    /// Encode a sequence as u64 (up to 8 bytes)
+    #[inline]
+    fn encode(seq: &[u8]) -> u64 {
+        let mut key = 0u64;
+        for (i, &b) in seq.iter().enumerate() {
+            key |= (b as u64) << (i * 8);
+        }
+        key
+    }
+
+    /// Build lookup table with all mismatch variants up to max_mismatches.
+    /// sub_ids contains the substitution ID for each pattern index.
+    fn new<'a>(
+        patterns: impl Iterator<Item = (usize, &'a [u8])>,
+        sub_ids: &[InlineString],
+        pattern_len: usize,
+        max_mismatches: usize,
+    ) -> Self {
+        let mut table = FxHashMap::default();
+
+        for (pattern_idx, pattern) in patterns {
+            let sub_id = sub_ids.get(pattern_idx).copied().unwrap_or_else(|| InlineString::new(b""));
+            
+            // Add exact match
+            table.entry(Self::encode(pattern)).or_insert(sub_id);
+
+            // Add 1-mismatch variants
+            if max_mismatches >= 1 {
+                for i in 0..pattern.len() {
+                    for &nuc in &Self::NUCLEOTIDES {
+                        if nuc != pattern[i] {
+                            let mut variant = pattern.to_vec();
+                            variant[i] = nuc;
+                            table.entry(Self::encode(&variant)).or_insert(sub_id);
+                        }
+                    }
+                }
+            }
+
+            // Add 2-mismatch variants
+            if max_mismatches >= 2 {
+                for i in 0..pattern.len() {
+                    for j in (i + 1)..pattern.len() {
+                        for &nuc1 in &Self::NUCLEOTIDES {
+                            if nuc1 != pattern[i] {
+                                for &nuc2 in &Self::NUCLEOTIDES {
+                                    if nuc2 != pattern[j] {
+                                        let mut variant = pattern.to_vec();
+                                        variant[i] = nuc1;
+                                        variant[j] = nuc2;
+                                        table.entry(Self::encode(&variant)).or_insert(sub_id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Self { table, pattern_len }
+    }
+
+    /// Lookup a sequence, returns the substitution ID if found.
+    #[inline]
+    fn lookup(&self, seq: &[u8]) -> Option<InlineString> {
+        if seq.len() != self.pattern_len {
+            return None;
+        }
+        self.table.get(&Self::encode(seq)).copied()
+    }
+}
+
 pub struct MatchAnyOp {
     required_names: Vec<LabelOrAttr>,
     label: Label,
@@ -26,6 +111,8 @@ pub struct MatchAnyOp {
     match_type: MatchType,
     aligner: ThreadLocal<Option<RefCell<Box<dyn Aligner + Send>>>>,
     seed_searcher: Option<SeedSearchers>,
+    /// Fast hash-based lookup for Hamming matching (when applicable)
+    hamming_lookup: Option<HammingLookup>,
     // Per-thread match-distance histograms; each thread stores counts by
     // exact edit distance, and we aggregate across threads when queried.
     distance_counts: ThreadLocal<RwLock<Vec<usize>>>,
@@ -66,6 +153,11 @@ impl MatchAnyOp {
             .map(|(_, p)| p.len())
             .max()
             .unwrap_or(0);
+        let min_literal_len = patterns
+            .iter_literals()
+            .map(|(_, p)| p.len())
+            .min()
+            .unwrap_or(0);
         let all_literals = patterns.iter_exprs().count() == 0;
         let mut required_names = vec![transform_expr.before(0).into()];
         required_names.extend(
@@ -73,6 +165,46 @@ impl MatchAnyOp {
                 .iter_exprs()
                 .flat_map(|(_, e)| e.required_names().into_iter()),
         );
+
+        // Build fast hash-based lookup for Hamming matching when:
+        // 1. All patterns are literals of the same length
+        // 2. Match type is Hamming with small mismatch count (≤2)
+        // 3. Pattern count is reasonable (≤1000)
+        let hamming_lookup = if let MatchType::Hamming(threshold) = match_type {
+            let max_mismatches = max_literal_len.saturating_sub(threshold.get(max_literal_len));
+            let pattern_count = patterns.iter_literals().count();
+            
+            if all_literals 
+                && max_literal_len == min_literal_len 
+                && max_mismatches <= 2
+                && pattern_count <= 1000
+                && max_literal_len > 0
+            {
+                // Extract substitution IDs from pattern attributes as InlineStrings
+                let sub_ids: Vec<InlineString> = patterns.patterns().iter()
+                    .map(|p| {
+                        p.attrs().iter()
+                            .find(|d| matches!(d, Data::Bytes(_)))
+                            .and_then(|d| if let Data::Bytes(b) = d { 
+                                // Convert to InlineString (up to 24 bytes)
+                                if b.len() <= 24 { Some(InlineString::new(b)) } else { None }
+                            } else { None })
+                            .unwrap_or_else(|| InlineString::new(b""))
+                    })
+                    .collect();
+                
+                Some(HammingLookup::new(
+                    patterns.iter_literals().map(|(i, p)| (i, p.as_ref())),
+                    &sub_ids,
+                    max_literal_len,
+                    max_mismatches,
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         Self {
             required_names,
@@ -84,6 +216,7 @@ impl MatchAnyOp {
             match_type,
             aligner: ThreadLocal::new(),
             seed_searcher,
+            hamming_lookup,
             distance_counts: ThreadLocal::new(),
             total_attempts: AtomicUsize::new(0),
         }
@@ -183,6 +316,57 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                     read: read.clone(),
                     context: Self::NAME,
                 })?;
+
+            // Fast path: use pre-computed hash lookup for Hamming matching
+            if let Some(ref lookup) = self.hamming_lookup {
+                let pattern_len = lookup.pattern_len;
+                match lookup.lookup(text) {
+                    Some(sub_id) => {
+                        // Fast path matched
+                        let mapping = read
+                            .mapping_mut(self.label.str_type, self.label.label)
+                            .unwrap();
+
+                        // Set sub and ambig attributes
+                        let sub_bytes: Vec<u8> = sub_id.bytes().collect();
+                        *mapping.data_mut(InlineString::new(b"sub")) = Data::Bytes(sub_bytes);
+                        *mapping.data_mut(InlineString::new(b"ambig")) = Data::Bytes(b"false".to_vec());
+
+                        // For Hamming match, num_mappings() is 1
+                        let start = mapping.start;
+                        let str_mappings = read.str_mappings_mut(self.label.str_type).unwrap();
+                        str_mappings.add_mapping(
+                            self.new_labels[0].as_ref().map(|l| l.label),
+                            start,
+                            pattern_len,
+                        );
+                        continue; // Skip slow path
+                    }
+                    None => {
+                        // Fast path no match - set up no-match result
+                        let (start, len) = {
+                            let mapping = read
+                                .mapping(self.label.str_type, self.label.label)
+                                .unwrap();
+                            (mapping.start, mapping.len)
+                        };
+
+                        if let Some(new_label) = &self.new_labels[0] {
+                            let str_mappings = read.str_mappings_mut(self.label.str_type).unwrap();
+                            str_mappings.add_mapping(Some(new_label.label), start, len);
+                        }
+
+                        let mapping = read
+                            .mapping_mut(self.label.str_type, self.label.label)
+                            .unwrap();
+
+                        // Set empty/ambig attributes for no-match
+                        *mapping.data_mut(InlineString::new(b"sub")) = Data::Bytes(Vec::new());
+                        *mapping.data_mut(InlineString::new(b"ambig")) = Data::Bytes(b"true".to_vec());
+                        continue; // Skip slow path
+                    }
+                }
+            }
 
             let mut seed_hits = FxHashSet::default();
 
