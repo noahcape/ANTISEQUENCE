@@ -137,6 +137,16 @@ impl OutputFastqFileOp {
     }
 }
 
+impl Drop for OutputFastqFileOp {
+    fn drop(&mut self) {
+        let writers = self.file_writers.lock();
+        for writer in writers.values() {
+            let mut w = writer.lock();
+            let _ = w.flush();
+        }
+    }
+}
+
 #[inline(always)]
 fn stub_output() -> bool {
     static STUB: OnceLock<bool> = OnceLock::new();
