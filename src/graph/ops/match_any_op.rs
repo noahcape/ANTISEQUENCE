@@ -223,6 +223,15 @@ impl MatchAnyOp {
     }
 
     fn get_searcher(patterns: &Patterns, match_type: &MatchType) -> Option<SeedSearchers> {
+        // Adaptive strategy: for small number of patterns, exhaustive search is faster
+        // than building/querying the k-mer index.
+        // For Edit/Hamming search types, exhaustive search (e.g. Myers) is highly optimized.
+        // Seeding adds overhead (finding k-mers) which is only amortized when filtering many patterns.
+        const MIN_PATTERNS_FOR_SEEDING: usize = 4;
+        if patterns.iter_literals().count() < MIN_PATTERNS_FOR_SEEDING {
+            return None;
+        }
+
         let min_len = patterns
             .iter_literals()
             .map(|(_, p)| p.len())
@@ -412,6 +421,21 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                             self.max_literal_len + additional(identity, self.max_literal_len),
                         );
                         (&text[offset..], offset, false)
+                    }
+                    Edit(_) => (text, 0, false),
+                    EditPrefix(t) => {
+                        let max_edits = t.get(self.max_literal_len);
+                        (&text[..text.len().min(self.max_literal_len + max_edits)], 0, false)
+                    }
+                    EditSuffix(t) => {
+                        let max_edits = t.get(self.max_literal_len);
+                        let offset = text.len().saturating_sub(self.max_literal_len + max_edits);
+                        (&text[offset..], offset, false)
+                    }
+                    EditSearch(_) => (text, 0, true),
+                    EditBoundedMatch { threshold: _, from, to } => {
+                        let to = text.len().min(to);
+                        (&text[from..to], 0, false)
                     }
                 };
 
@@ -606,6 +630,46 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                             .borrow_mut()
                             .align(&text[text_start..], pattern_str, identity, overlap)
                             .map(|(m, start_idx, _)| (m, text_start + start_idx, 0))
+                    }
+                    Edit(t) => {
+                        let max_edits = t.get(pattern_len);
+                        edit_distance(text, pattern_str, max_edits)
+                            .map(|m| (m, pattern_len, 0))
+                    }
+                    EditPrefix(t) => {
+                        let max_edits = t.get(pattern_len);
+                        edit_prefix(text, pattern_str, max_edits)
+                            .map(|(m, end_pos)| (m, end_pos, 0))
+                    }
+                    EditSuffix(t) => {
+                        let max_edits = t.get(pattern_len);
+                        edit_suffix(text, pattern_str, max_edits)
+                            .map(|(m, start_pos)| (m, start_pos, 0))
+                    }
+                    EditSearch(t) => {
+                        let max_edits = t.get(pattern_len);
+                        if let Some(text_i) = text_i {
+                            // Seed hit - search around the seed position
+                            let text_start = (text_i - (max_edits as isize)).max(0) as usize;
+                            let text_end = text.len().min((text_i + (pattern_len as isize) + (max_edits as isize)) as usize);
+                            if text_end > text_start {
+                                let text_slice = &text[text_start..text_end];
+                                edit_search(text_slice, pattern_str, max_edits)
+                                    .map(|(m, start_idx, end_idx)| (m, text_start + start_idx, text_start + end_idx))
+                            } else {
+                                None
+                            }
+                        } else {
+                            // No seed hit - full search
+                            edit_search(text, pattern_str, max_edits)
+                        }
+                    }
+                    EditBoundedMatch { threshold: t, from, to } => {
+                        let max_edits = t.get(pattern_len);
+                        let to_exclusive = text.len().min(to + 1);
+                        let text_around = &text[from..to_exclusive];
+                        edit_search(text_around, pattern_str, max_edits)
+                            .map(|(m, start_idx, end_idx)| (m, from + start_idx, from + end_idx))
                     }
                 };
 
@@ -865,6 +929,290 @@ fn hamming_search(a: &[u8], b: &[u8], threshold: usize) -> Option<(usize, usize,
     }
 
     best_match
+}
+
+/// Compute edit distance (Levenshtein distance) between two sequences.
+/// Returns the number of matches (len - edits) if within threshold, None otherwise.
+/// Uses Myers' bit-vector algorithm for sequences up to 64bp, falls back to DP otherwise.
+fn edit_distance(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<usize> {
+    let m = pattern.len();
+    let n = text.len();
+    
+    if m == 0 {
+        return if n <= max_edits { Some(m) } else { None };
+    }
+    if n == 0 {
+        return if m <= max_edits { Some(0) } else { None };
+    }
+    
+    // For full match, lengths should be similar within edit distance
+    let len_diff = if n > m { n - m } else { m - n };
+    if len_diff > max_edits {
+        return None;
+    }
+    
+    // Use Myers' bit-vector for patterns up to 64bp
+    if m <= 64 {
+        edit_distance_myers(text, pattern, max_edits)
+    } else {
+        edit_distance_dp(text, pattern, max_edits)
+    }
+}
+
+/// Myers' bit-vector algorithm for edit distance (patterns up to 64bp)
+fn edit_distance_myers(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<usize> {
+    let m = pattern.len();
+    let _n = text.len();
+    
+    // Build pattern bitmasks for each character
+    let mut peq = [0u64; 256];
+    for (i, &c) in pattern.iter().enumerate() {
+        peq[c as usize] |= 1u64 << i;
+    }
+    
+    // Initialize bit vectors
+    let mut pv: u64 = !0u64; // all 1s
+    let mut mv: u64 = 0u64;  // all 0s
+    let mut score = m;
+    let high_bit = 1u64 << (m - 1);
+    
+    for &c in text {
+        let eq = peq[c as usize];
+        let xv = eq | mv;
+        let xh = ((eq & pv).wrapping_add(pv)) ^ pv | eq;
+        
+        let ph = mv | !(xh | pv);
+        let mh = pv & xh;
+        
+        // Update score
+        if (ph & high_bit) != 0 {
+            score += 1;
+        }
+        if (mh & high_bit) != 0 {
+            score -= 1;
+        }
+        
+        // Shift for next iteration
+        pv = (mh << 1) | !(xv | (ph << 1));
+        mv = (ph << 1) & xv;
+    }
+    
+    if score <= max_edits {
+        Some(m.saturating_sub(score))
+    } else {
+        None
+    }
+}
+
+/// Standard DP algorithm for edit distance (for patterns > 64bp)
+fn edit_distance_dp(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<usize> {
+    let m = pattern.len();
+    let n = text.len();
+    
+    // Use two rows for space efficiency
+    let mut prev = vec![0usize; m + 1];
+    let mut curr = vec![0usize; m + 1];
+    
+    // Initialize first row
+    for j in 0..=m {
+        prev[j] = j;
+    }
+    
+    for i in 1..=n {
+        curr[0] = i;
+        let mut min_in_row = curr[0];
+        
+        for j in 1..=m {
+            let cost = if text[i - 1] == pattern[j - 1] { 0 } else { 1 };
+            curr[j] = (prev[j - 1] + cost)
+                .min(prev[j] + 1)
+                .min(curr[j - 1] + 1);
+            min_in_row = min_in_row.min(curr[j]);
+        }
+        
+        // Early termination if minimum in row exceeds threshold
+        if min_in_row > max_edits {
+            return None;
+        }
+        
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    
+    let edits = prev[m];
+    if edits <= max_edits {
+        Some(m.saturating_sub(edits))
+    } else {
+        None
+    }
+}
+
+/// Search for the best edit distance match of pattern in text.
+/// Returns (matches, start_idx, end_idx) for the best match within threshold.
+/// Uses semi-global alignment where gaps at text boundaries are free.
+fn edit_search(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usize, usize, usize)> {
+    let m = pattern.len();
+    let n = text.len();
+    
+    if m == 0 || n == 0 {
+        return None;
+    }
+    
+    // Use Myers' bit-vector semi-global search for patterns up to 64bp
+    if m <= 64 {
+        edit_search_myers(text, pattern, max_edits)
+    } else {
+        edit_search_dp(text, pattern, max_edits)
+    }
+}
+
+/// Myers' bit-vector algorithm for semi-global edit distance search (patterns up to 64bp)
+fn edit_search_myers(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usize, usize, usize)> {
+    let m = pattern.len();
+    let n = text.len();
+    
+    // Build pattern bitmasks
+    let mut peq = [0u64; 256];
+    for (i, &c) in pattern.iter().enumerate() {
+        peq[c as usize] |= 1u64 << i;
+    }
+    
+    let mut pv: u64 = !0u64;
+    let mut mv: u64 = 0u64;
+    let mut score = m;
+    let high_bit = 1u64 << (m - 1);
+    
+    let mut best_score = usize::MAX;
+    let mut best_end = 0;
+    
+    // Store scores for traceback
+    let mut scores = Vec::with_capacity(n);
+    
+    for (i, &c) in text.iter().enumerate() {
+        let eq = peq[c as usize];
+        let xv = eq | mv;
+        let xh = ((eq & pv).wrapping_add(pv)) ^ pv | eq;
+        
+        let ph = mv | !(xh | pv);
+        let mh = pv & xh;
+        
+        if (ph & high_bit) != 0 {
+            score += 1;
+        }
+        if (mh & high_bit) != 0 {
+            score -= 1;
+        }
+        
+        scores.push(score);
+        
+        if score <= max_edits && score < best_score {
+            best_score = score;
+            best_end = i + 1;
+        }
+        
+        pv = (mh << 1) | !(xv | (ph << 1));
+        mv = (ph << 1) & xv;
+    }
+    
+    if best_score > max_edits {
+        return None;
+    }
+    
+    // Estimate start position (pattern length - edits allows for indels)
+    let approx_len = m.saturating_sub(best_score).max(m + best_score);
+    let start = best_end.saturating_sub(approx_len.min(best_end));
+    
+    Some((m.saturating_sub(best_score), start, best_end))
+}
+
+/// DP-based semi-global edit distance search for longer patterns
+fn edit_search_dp(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usize, usize, usize)> {
+    let m = pattern.len();
+    let n = text.len();
+    
+    // DP with free gaps at text boundaries (semi-global)
+    let mut prev = vec![0usize; m + 1];
+    let mut curr = vec![0usize; m + 1];
+    
+    // Initialize: gaps in pattern cost, gaps in text at start are free
+    for j in 0..=m {
+        prev[j] = j;
+    }
+    
+    let mut best_score = usize::MAX;
+    let mut best_end = 0;
+    let mut best_row_scores = vec![usize::MAX; n + 1];
+    
+    for i in 1..=n {
+        curr[0] = 0; // Free gaps at text start
+        
+        for j in 1..=m {
+            let cost = if text[i - 1] == pattern[j - 1] { 0 } else { 1 };
+            curr[j] = (prev[j - 1] + cost)
+                .min(prev[j] + 1)
+                .min(curr[j - 1] + 1);
+        }
+        
+        best_row_scores[i] = curr[m];
+        
+        // Check if this is a valid end position (free gaps at text end)
+        if curr[m] <= max_edits && curr[m] < best_score {
+            best_score = curr[m];
+            best_end = i;
+        }
+        
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    
+    if best_score > max_edits {
+        return None;
+    }
+    
+    // Traceback to find start position
+    let approx_len = m.saturating_sub(best_score).max(1);
+    let start = best_end.saturating_sub(approx_len + best_score);
+    
+    Some((m.saturating_sub(best_score), start, best_end))
+}
+
+/// Edit distance for prefix matching - pattern should match a prefix of text
+fn edit_prefix(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usize, usize)> {
+    let m = pattern.len();
+    
+    if m == 0 {
+        return Some((0, 0));
+    }
+    
+    // Search within a window at the start
+    let search_end = (m + max_edits).min(text.len());
+    let text_prefix = &text[..search_end];
+    
+    // Use semi-global alignment
+    if let Some((matches, _, end)) = edit_search(text_prefix, pattern, max_edits) {
+        // Verify it starts at position 0 (or within edit distance of start)
+        Some((matches, end))
+    } else {
+        None
+    }
+}
+
+/// Edit distance for suffix matching - pattern should match a suffix of text
+fn edit_suffix(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usize, usize)> {
+    let m = pattern.len();
+    let n = text.len();
+    
+    if m == 0 {
+        return Some((0, n));
+    }
+    
+    // Search within a window at the end
+    let search_start = n.saturating_sub(m + max_edits);
+    let text_suffix = &text[search_start..];
+    
+    if let Some((matches, start, _)) = edit_search(text_suffix, pattern, max_edits) {
+        Some((matches, search_start + start))
+    } else {
+        None
+    }
 }
 
 trait Aligner {

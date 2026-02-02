@@ -345,23 +345,62 @@ pub enum MatchType {
         from: usize,
         to: usize,
     },
+    /// Edit-distance-based (Levenshtein) matching.
+    ///
+    /// Threshold is the maximum number of edits (insertions, deletions, substitutions) allowed.
+    ///
+    /// A match will result in one new interval: the entire string.
+    Edit(Threshold),
+    /// Edit-distance-based prefix matching.
+    ///
+    /// Threshold is the maximum number of edits allowed.
+    ///
+    /// A match will result in two new intervals: the matched prefix and the rest of the string.
+    EditPrefix(Threshold),
+    /// Edit-distance-based suffix matching.
+    ///
+    /// Threshold is the maximum number of edits allowed.
+    ///
+    /// A match will result in two new intervals: the rest of the string and the matched suffix.
+    EditSuffix(Threshold),
+    /// Edit-distance-based searching.
+    ///
+    /// Threshold is the maximum number of edits allowed.
+    ///
+    /// A match will result in three new intervals: everything before the match, the matching
+    /// region, and everything after the match.
+    EditSearch(Threshold),
+    /// Edit-distance-based alignment within a range.
+    ///
+    /// A match will result in three new intervals: everything before the aligned region, the aligned
+    /// region, and everything after the aligned region.
+    /// Use inclusive range indexing, from..=to
+    EditBoundedMatch {
+        threshold: Threshold,
+        from: usize,
+        to: usize,
+    },
 }
 
 impl MatchType {
     pub fn num_mappings(&self) -> usize {
         use MatchType::*;
         match self {
-            Exact | Hamming(_) | GlobalAln(_) => 1,
+            Exact | Hamming(_) | Edit(_) | GlobalAln(_) => 1,
             ExactPrefix
             | ExactSuffix
             | HammingPrefix(_)
             | HammingSuffix(_)
+            | EditPrefix(_)
+            | EditSuffix(_)
             | PrefixAln { .. }
             | SuffixAln { .. } => 2,
             ExactSearch
             | HammingSearch(_)
+            | EditSearch(_)
             | LocalAln { .. }
             | HammingBoundedMatch { .. }
+            | EditBoundedMatch { .. }
             | ExactBoundedMatch { .. } => 3,
         }
     }
@@ -380,6 +419,11 @@ impl MatchType {
             HammingSuffix(t) => k_from_edits(len, t.get(len)),
             HammingSearch(t) => k_from_edits(len, t.get(len)),
             HammingBoundedMatch { threshold: t, .. } => k_from_edits(len, t.get(len)),
+            Edit(t) => k_from_edits(len, t.get(len)),
+            EditPrefix(t) => k_from_edits(len, t.get(len)),
+            EditSuffix(t) => k_from_edits(len, t.get(len)),
+            EditSearch(t) => k_from_edits(len, t.get(len)),
+            EditBoundedMatch { threshold: t, .. } => k_from_edits(len, t.get(len)),
             GlobalAln(identity) => {
                 k_from_edits(len, len - (((len as f64) * identity).ceil() as usize))
             }
