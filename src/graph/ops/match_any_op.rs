@@ -223,12 +223,25 @@ impl MatchAnyOp {
     }
 
     fn get_searcher(patterns: &Patterns, match_type: &MatchType) -> Option<SeedSearchers> {
-        // Adaptive strategy: for small number of patterns, exhaustive search is faster
-        // than building/querying the k-mer index.
-        // For Edit/Hamming search types, exhaustive search (e.g. Myers) is highly optimized.
-        // Seeding adds overhead (finding k-mers) which is only amortized when filtering many patterns.
+        // For Edit/Hamming match types with small pattern sets, exhaustive search
+        // (e.g. Myers bit-vector) is faster than building/querying the k-mer index.
+        // Only skip seeding for these approximate match types; Exact and alignment
+        // types should always use seeding when available.
         const MIN_PATTERNS_FOR_SEEDING: usize = 4;
-        if patterns.iter_literals().count() < MIN_PATTERNS_FOR_SEEDING {
+        if matches!(
+            match_type,
+            MatchType::Edit(_)
+                | MatchType::EditPrefix(_)
+                | MatchType::EditSuffix(_)
+                | MatchType::EditSearch(_)
+                | MatchType::EditBoundedMatch { .. }
+                | MatchType::Hamming(_)
+                | MatchType::HammingPrefix(_)
+                | MatchType::HammingSuffix(_)
+                | MatchType::HammingSearch(_)
+                | MatchType::HammingBoundedMatch { .. }
+        ) && patterns.iter_literals().count() < MIN_PATTERNS_FOR_SEEDING
+        {
             return None;
         }
 
@@ -1065,154 +1078,259 @@ fn edit_search(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usize, 
     }
 }
 
-/// Myers' bit-vector algorithm for semi-global edit distance search (patterns up to 64bp)
+/// Myers' bit-vector algorithm for semi-global edit distance search (patterns up to 64bp).
+/// Uses a forward pass to find the best end position, then a reverse DP pass to find
+/// the exact start position.
 fn edit_search_myers(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usize, usize, usize)> {
     let m = pattern.len();
-    let n = text.len();
-    
+
     // Build pattern bitmasks
     let mut peq = [0u64; 256];
     for (i, &c) in pattern.iter().enumerate() {
         peq[c as usize] |= 1u64 << i;
     }
-    
+
     let mut pv: u64 = !0u64;
     let mut mv: u64 = 0u64;
     let mut score = m;
     let high_bit = 1u64 << (m - 1);
-    
+
     let mut best_score = usize::MAX;
     let mut best_end = 0;
-    
-    // Store scores for traceback
-    let mut scores = Vec::with_capacity(n);
-    
+
     for (i, &c) in text.iter().enumerate() {
         let eq = peq[c as usize];
         let xv = eq | mv;
         let xh = ((eq & pv).wrapping_add(pv)) ^ pv | eq;
-        
+
         let ph = mv | !(xh | pv);
         let mh = pv & xh;
-        
+
         if (ph & high_bit) != 0 {
             score += 1;
         }
         if (mh & high_bit) != 0 {
             score -= 1;
         }
-        
-        scores.push(score);
-        
+
         if score <= max_edits && score < best_score {
             best_score = score;
             best_end = i + 1;
         }
-        
+
         pv = (mh << 1) | !(xv | (ph << 1));
         mv = (ph << 1) & xv;
     }
-    
+
     if best_score > max_edits {
         return None;
     }
-    
-    // Estimate start position (pattern length - edits allows for indels)
-    let approx_len = m.saturating_sub(best_score).max(m + best_score);
-    let start = best_end.saturating_sub(approx_len.min(best_end));
-    
+
+    // Reverse DP to find exact start position
+    let start = find_start_reverse_dp(&text[..best_end], pattern, best_score);
+
     Some((m.saturating_sub(best_score), start, best_end))
 }
 
-/// DP-based semi-global edit distance search for longer patterns
+/// Find the exact start position of a semi-global alignment by running a reverse DP.
+/// Given that the best alignment ends at text[..end_pos] with `edits` edits,
+/// align the reversed pattern against the reversed text suffix to find where
+/// the alignment begins.
+fn find_start_reverse_dp(text: &[u8], pattern: &[u8], edits: usize) -> usize {
+    let m = pattern.len();
+    let n = text.len();
+
+    // Reverse DP: align reversed pattern against reversed text (semi-global)
+    let mut prev = vec![0usize; m + 1];
+    let mut curr = vec![0usize; m + 1];
+
+    for j in 0..=m {
+        prev[j] = j;
+    }
+
+    let mut best_score = m;
+    let mut best_start_from_end = 0;
+
+    for i in 1..=n {
+        curr[0] = 0; // Free gaps at start of reversed text (= free gaps at end of original)
+        for j in 1..=m {
+            let cost = if text[n - i] == pattern[m - j] { 0 } else { 1 };
+            curr[j] = (prev[j - 1] + cost)
+                .min(prev[j] + 1)
+                .min(curr[j - 1] + 1);
+        }
+        if curr[m] <= edits && curr[m] <= best_score {
+            best_score = curr[m];
+            best_start_from_end = i;
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+
+    n - best_start_from_end
+}
+
+/// DP-based semi-global edit distance search for longer patterns.
+/// Uses a forward pass to find the best end position, then a reverse DP pass to find
+/// the exact start position.
 fn edit_search_dp(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usize, usize, usize)> {
     let m = pattern.len();
     let n = text.len();
-    
+
     // DP with free gaps at text boundaries (semi-global)
     let mut prev = vec![0usize; m + 1];
     let mut curr = vec![0usize; m + 1];
-    
+
     // Initialize: gaps in pattern cost, gaps in text at start are free
     for j in 0..=m {
         prev[j] = j;
     }
-    
+
     let mut best_score = usize::MAX;
     let mut best_end = 0;
-    let mut best_row_scores = vec![usize::MAX; n + 1];
-    
+
     for i in 1..=n {
         curr[0] = 0; // Free gaps at text start
-        
+
         for j in 1..=m {
             let cost = if text[i - 1] == pattern[j - 1] { 0 } else { 1 };
             curr[j] = (prev[j - 1] + cost)
                 .min(prev[j] + 1)
                 .min(curr[j - 1] + 1);
         }
-        
-        best_row_scores[i] = curr[m];
-        
+
         // Check if this is a valid end position (free gaps at text end)
         if curr[m] <= max_edits && curr[m] < best_score {
             best_score = curr[m];
             best_end = i;
         }
-        
+
         std::mem::swap(&mut prev, &mut curr);
     }
-    
+
     if best_score > max_edits {
         return None;
     }
-    
-    // Traceback to find start position
-    let approx_len = m.saturating_sub(best_score).max(1);
-    let start = best_end.saturating_sub(approx_len + best_score);
-    
+
+    // Reverse DP to find exact start position
+    let start = find_start_reverse_dp(&text[..best_end], pattern, best_score);
+
     Some((m.saturating_sub(best_score), start, best_end))
 }
 
-/// Edit distance for prefix matching - pattern should match a prefix of text
+/// Edit distance for prefix matching - pattern should match a prefix of text.
+/// Uses a DP where gaps at the text start DO cost (alignment must begin at position 0),
+/// but gaps at the text end are free (the match can end anywhere).
+/// Returns (matches, end_position) where matches = pattern_len - edits.
 fn edit_prefix(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usize, usize)> {
     let m = pattern.len();
-    
+
     if m == 0 {
         return Some((0, 0));
     }
-    
-    // Search within a window at the start
+
+    // Only need to scan up to m + max_edits text positions
     let search_end = (m + max_edits).min(text.len());
     let text_prefix = &text[..search_end];
-    
-    // Use semi-global alignment
-    if let Some((matches, _, end)) = edit_search(text_prefix, pattern, max_edits) {
-        // Verify it starts at position 0 (or within edit distance of start)
-        Some((matches, end))
-    } else {
-        None
+    let n = text_prefix.len();
+
+    let mut prev = vec![0usize; m + 1];
+    let mut curr = vec![0usize; m + 1];
+
+    // Initialize: dp[0][j] = j (cost to match first j pattern chars with empty text prefix)
+    for j in 0..=m {
+        prev[j] = j;
     }
+
+    let mut best_score = prev[m]; // aligning empty text against full pattern = m deletions
+    let mut best_end = 0;
+
+    for i in 1..=n {
+        curr[0] = i; // Gaps at text start DO cost (unlike semi-global search)
+
+        for j in 1..=m {
+            let cost = if text_prefix[i - 1] == pattern[j - 1] { 0 } else { 1 };
+            curr[j] = (prev[j - 1] + cost)
+                .min(prev[j] + 1)
+                .min(curr[j - 1] + 1);
+        }
+
+        // Free gaps at text end: check if full pattern is matched at this text position
+        if curr[m] <= max_edits && curr[m] <= best_score {
+            best_score = curr[m];
+            best_end = i;
+        }
+
+        std::mem::swap(&mut prev, &mut curr);
+    }
+
+    if best_score > max_edits {
+        return None;
+    }
+
+    Some((m.saturating_sub(best_score), best_end))
 }
 
-/// Edit distance for suffix matching - pattern should match a suffix of text
+/// Edit distance for suffix matching - pattern should match a suffix of text.
+/// Uses a DP where gaps at the text end DO cost (alignment must end at the last position),
+/// but gaps at the text start are free (the match can begin anywhere).
+/// Returns (matches, start_position) where matches = pattern_len - edits.
 fn edit_suffix(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usize, usize)> {
     let m = pattern.len();
     let n = text.len();
-    
+
     if m == 0 {
         return Some((0, n));
     }
-    
-    // Search within a window at the end
+
+    // Only need to scan the last m + max_edits text positions
     let search_start = n.saturating_sub(m + max_edits);
     let text_suffix = &text[search_start..];
-    
-    if let Some((matches, start, _)) = edit_search(text_suffix, pattern, max_edits) {
-        Some((matches, search_start + start))
-    } else {
-        None
+    let sn = text_suffix.len();
+
+    // Reverse DP on text_suffix and pattern:
+    // Align reversed pattern against reversed text_suffix.
+    // Free gaps at the start of reversed text (= free gaps at the END of original text_suffix)
+    // would be wrong -- we want suffix alignment where the match must reach the text end.
+    // Instead: align reversed text_suffix against reversed pattern with:
+    //   curr[0] = i (gaps at reversed-text start cost = gaps at original-text end cost)
+    //   answer = min over i of dp[i][m] (free gaps at reversed-text end = free original-text start)
+    // This is the mirror of edit_prefix.
+    let mut prev = vec![0usize; m + 1];
+    let mut curr = vec![0usize; m + 1];
+
+    for j in 0..=m {
+        prev[j] = j;
     }
+
+    let mut best_score = prev[m];
+    let mut best_start_from_end = 0;
+
+    for i in 1..=sn {
+        curr[0] = i; // Gaps at text end DO cost
+
+        for j in 1..=m {
+            // Traverse both text and pattern in reverse
+            let cost = if text_suffix[sn - i] == pattern[m - j] { 0 } else { 1 };
+            curr[j] = (prev[j - 1] + cost)
+                .min(prev[j] + 1)
+                .min(curr[j - 1] + 1);
+        }
+
+        // Free gaps at text start: check if full pattern is matched at this text position
+        if curr[m] <= max_edits && curr[m] <= best_score {
+            best_score = curr[m];
+            best_start_from_end = i;
+        }
+
+        std::mem::swap(&mut prev, &mut curr);
+    }
+
+    if best_score > max_edits {
+        return None;
+    }
+
+    let start = search_start + (sn - best_start_from_end);
+    Some((m.saturating_sub(best_score), start))
 }
 
 trait Aligner {
@@ -1524,5 +1642,199 @@ impl<const PREFIX: bool> Aligner for PrefixSuffixAligner<PREFIX> {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod edit_distance_tests {
+    use super::*;
+
+    // -- Bug 1: edit_search_myers estimates start position instead of computing it exactly --
+    // Use 8bp patterns to avoid ambiguous partial matches with shorter patterns.
+    #[test]
+    fn test_edit_search_myers_start_position_substitution() {
+        // Pattern "ACGTACGT" placed at position 10 with 1 sub in the middle (T->X)
+        // text[10..18] = "ACGXACGT" vs pattern "ACGTACGT" = 1 substitution
+        let text = b"NNNNNNNNNNACGXACGTNNNNNNNNNN";
+        let pattern = b"ACGTACGT";
+        let result = edit_search(text, pattern, 1);
+        assert!(result.is_some(), "should find match with 1 edit");
+        let (_matches, start, end) = result.unwrap();
+        assert_eq!(end, 18, "end should be 18");
+        // Buggy estimation: start = 18 - max(8-1, 8+1) = 18 - 9 = 9
+        // Correct: start = 10
+        assert_eq!(start, 10, "start should be exactly 10, not an estimate");
+    }
+
+    #[test]
+    fn test_edit_search_myers_start_position_deletion() {
+        // Pattern "ACGTACGT" with 1 deletion in text: "ACGACGT" at position 10
+        // text[10..17] = "ACGACGT" aligns to "ACGTACGT" with 1 insertion (add T at pos 3)
+        let text = b"NNNNNNNNNNACGACGTNNNNNNNNNN";
+        let pattern = b"ACGTACGT";
+        let result = edit_search(text, pattern, 1);
+        assert!(result.is_some(), "should find match with 1 edit");
+        let (_matches, start, end) = result.unwrap();
+        // Match spans 7 text chars: text[10..17]
+        assert_eq!(end, 17, "end should be 17");
+        // Buggy estimation: start = 17 - max(8-1, 8+1) = 17 - 9 = 8
+        // Correct: start = 10
+        assert_eq!(start, 10, "start should be exactly 10, not an estimate");
+    }
+
+    // -- Bug 2: edit_prefix doesn't verify match starts at position 0 --
+    #[test]
+    fn test_edit_prefix_reports_correct_match_quality() {
+        // text starts with NNN then has ACGT: "NNNACGTNNNN"
+        // With max_edits=3, search window = 4+3 = 7: text_prefix = "NNNACGT"
+        // edit_search finds exact ACGT at position 3-7 (0 edits, 4 matches)
+        // But the correct PREFIX alignment is: delete NNN (3 edits), then ACGT = 1 match
+        let text = b"NNNACGTNNNN";
+        let pattern = b"ACGT";
+        let result = edit_prefix(text, pattern, 3);
+        assert!(result.is_some(), "there IS a valid prefix alignment within 3 edits");
+        let (matches, end) = result.unwrap();
+        // Correct: prefix alignment deletes NNN (3 edits) -> matches = 4 - 3 = 1
+        // Buggy: finds internal exact match (0 edits) -> matches = 4
+        assert_eq!(matches, 1, "prefix match should report 1 match (3 edits for deleting NNN)");
+        assert_eq!(end, 7, "should consume 7 text bytes");
+    }
+
+    #[test]
+    fn test_edit_prefix_with_insertion_at_start() {
+        // text = "XACGT..." - 1 insertion (X) before the real prefix match
+        // Correct prefix alignment: delete X (1 edit), then ACGT matches -> end=5, 1 edit
+        let text = b"XACGTNNNN";
+        let pattern = b"ACGT";
+        let result = edit_prefix(text, pattern, 1);
+        assert!(result.is_some(), "should find prefix match with 1 insertion");
+        let (matches, end) = result.unwrap();
+        assert_eq!(matches, 3, "should report 3 matches (1 edit)");
+        assert_eq!(end, 5, "should consume 5 text bytes");
+    }
+
+    // -- Bug 3: edit_search_dp estimates start position (patterns > 64bp) --
+    #[test]
+    fn test_edit_search_dp_start_position() {
+        // 68bp pattern to force DP path (> 64bp)
+        let pattern = b"ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT";
+        assert!(pattern.len() > 64, "pattern must be > 64bp to use DP path");
+        // Place pattern at position 10 with 1 substitution in the middle (pos 34: T->N)
+        let mut placed = pattern.to_vec();
+        placed[34] = b'X'; // 1 substitution in the middle
+        // Use 'T' padding to be distinct from the substituted 'X'
+        let mut text = vec![b'T'; 10];
+        text.extend_from_slice(&placed);
+        text.extend_from_slice(&[b'T'; 10]);
+        let start_pos = 10;
+        let end_pos = start_pos + pattern.len();
+
+        let result = edit_search(&text, pattern, 1);
+        assert!(result.is_some(), "should find match with 1 edit");
+        let (_matches, start, end) = result.unwrap();
+        assert_eq!(start, start_pos, "DP start should be exact");
+        assert_eq!(end, end_pos, "DP end should be exact");
+    }
+
+    // -- Bug 5: Edit full match uses pattern_len as cut position --
+    #[test]
+    fn test_edit_distance_with_insertion() {
+        // text = "ACGGT" (5bp), pattern = "ACGT" (4bp), 1 insertion (extra G)
+        let text = b"ACGGT";
+        let pattern = b"ACGT";
+        let result = edit_distance(text, pattern, 1);
+        assert!(result.is_some(), "should match with 1 edit");
+    }
+
+    #[test]
+    fn test_edit_distance_with_deletion() {
+        // text = "ACT" (3bp), pattern = "ACGT" (4bp), 1 deletion (missing G)
+        let text = b"ACT";
+        let pattern = b"ACGT";
+        let result = edit_distance(text, pattern, 1);
+        assert!(result.is_some(), "should match with 1 edit (deletion)");
+    }
+
+    // -- Correctness baselines --
+    #[test]
+    fn test_edit_distance_exact_match() {
+        let result = edit_distance(b"ACGT", b"ACGT", 0);
+        assert_eq!(result, Some(4));
+    }
+
+    #[test]
+    fn test_edit_distance_one_sub() {
+        let result = edit_distance(b"ACGC", b"ACGT", 1);
+        assert_eq!(result, Some(3));
+    }
+
+    #[test]
+    fn test_edit_distance_over_threshold() {
+        let result = edit_distance(b"NNNN", b"ACGT", 1);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_edit_search_exact_match() {
+        let text = b"NNNNNACGTNNNNNN";
+        let pattern = b"ACGT";
+        let result = edit_search(text, pattern, 0);
+        assert!(result.is_some());
+        let (matches, start, end) = result.unwrap();
+        assert_eq!(matches, 4);
+        assert_eq!(start, 5);
+        assert_eq!(end, 9);
+    }
+
+    #[test]
+    fn test_edit_prefix_exact() {
+        let text = b"ACGTNNNNNN";
+        let pattern = b"ACGT";
+        let result = edit_prefix(text, pattern, 0);
+        assert!(result.is_some());
+        let (matches, end) = result.unwrap();
+        assert_eq!(matches, 4);
+        assert_eq!(end, 4);
+    }
+
+    #[test]
+    fn test_edit_suffix_exact() {
+        let text = b"NNNNNNACGT";
+        let pattern = b"ACGT";
+        let result = edit_suffix(text, pattern, 0);
+        assert!(result.is_some());
+        let (matches, start) = result.unwrap();
+        assert_eq!(matches, 4);
+        assert_eq!(start, 6);
+    }
+
+    #[test]
+    fn test_edit_suffix_reports_correct_match_quality() {
+        // text ends with ACGT then NNN: "NNNNACGTNNN"
+        // With max_edits=3, search window covers "ACGTNNN" (last 7 bytes)
+        // edit_search finds exact ACGT at position 0-4 of the window (0 edits, 4 matches)
+        // But the correct SUFFIX alignment is: delete NNN at end (3 edits), ACGT matches
+        let text = b"NNNNACGTNNN";
+        let pattern = b"ACGT";
+        let result = edit_suffix(text, pattern, 3);
+        assert!(result.is_some(), "there IS a valid suffix alignment within 3 edits");
+        let (matches, start) = result.unwrap();
+        // Correct: suffix alignment deletes trailing NNN (3 edits) -> matches = 4 - 3 = 1
+        // Buggy: finds internal exact match (0 edits) -> matches = 4
+        assert_eq!(matches, 1, "suffix match should report 1 match (3 edits for deleting NNN)");
+        assert_eq!(start, 4, "suffix match should start at position 4");
+    }
+
+    #[test]
+    fn test_edit_suffix_with_insertion_at_end() {
+        // text = "NNNNACGTX" - 1 insertion (X) after the real suffix match
+        // Correct suffix alignment: delete X (1 edit), then ACGT matches -> start=4, 1 edit
+        let text = b"NNNNACGTX";
+        let pattern = b"ACGT";
+        let result = edit_suffix(text, pattern, 1);
+        assert!(result.is_some(), "should find suffix match with 1 insertion");
+        let (matches, start) = result.unwrap();
+        assert_eq!(matches, 3, "should report 3 matches (1 edit)");
+        assert_eq!(start, 4, "should start at position 4");
     }
 }
