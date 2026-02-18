@@ -1,6 +1,6 @@
 use block_aligner::{cigar::*, scan_block::*, scores::*};
 
-use rustc_hash::{FxHashSet, FxHashMap};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use memchr::memmem;
 
@@ -8,8 +8,8 @@ use thread_local::*;
 
 use std::cell::RefCell;
 use std::marker::Send;
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::RwLock;
 
 use crate::graph::*;
 use crate::inline_string::InlineString;
@@ -49,8 +49,11 @@ impl HammingLookup {
         let mut table = FxHashMap::default();
 
         for (pattern_idx, pattern) in patterns {
-            let sub_id = sub_ids.get(pattern_idx).copied().unwrap_or_else(|| InlineString::new(b""));
-            
+            let sub_id = sub_ids
+                .get(pattern_idx)
+                .copied()
+                .unwrap_or_else(|| InlineString::new(b""));
+
             // Add exact match
             table.entry(Self::encode(pattern)).or_insert(sub_id);
 
@@ -142,8 +145,12 @@ impl MatchAnyOp {
         let mut new_labels = [None, None, None];
 
         transform_expr.check_size(1, match_type.num_mappings(), Self::NAME);
-        for i in 0..match_type.num_mappings() {
-            new_labels[i] = transform_expr.after_label(i, Self::NAME);
+        for (i, label) in new_labels
+            .iter_mut()
+            .take(match_type.num_mappings())
+            .enumerate()
+        {
+            *label = transform_expr.after_label(i, Self::NAME);
         }
         transform_expr.check_same_str_type(Self::NAME);
 
@@ -173,28 +180,39 @@ impl MatchAnyOp {
         let hamming_lookup = if let MatchType::Hamming(threshold) = match_type {
             let max_mismatches = max_literal_len.saturating_sub(threshold.get(max_literal_len));
             let pattern_count = patterns.iter_literals().count();
-            
-            if all_literals 
-                && max_literal_len == min_literal_len 
+
+            if all_literals
+                && max_literal_len == min_literal_len
                 && max_mismatches <= 2
                 && pattern_count <= 1000
                 && max_literal_len > 0
             {
                 // Extract substitution IDs from pattern attributes as InlineStrings
-                let sub_ids: Vec<InlineString> = patterns.patterns().iter()
+                let sub_ids: Vec<InlineString> = patterns
+                    .patterns()
+                    .iter()
                     .map(|p| {
-                        p.attrs().iter()
+                        p.attrs()
+                            .iter()
                             .find(|d| matches!(d, Data::Bytes(_)))
-                            .and_then(|d| if let Data::Bytes(b) = d { 
-                                // Convert to InlineString (up to 24 bytes)
-                                if b.len() <= 24 { Some(InlineString::new(b)) } else { None }
-                            } else { None })
+                            .and_then(|d| {
+                                if let Data::Bytes(b) = d {
+                                    // Convert to InlineString (up to 24 bytes)
+                                    if b.len() <= 24 {
+                                        Some(InlineString::new(b))
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            })
                             .unwrap_or_else(|| InlineString::new(b""))
                     })
                     .collect();
-                
+
                 Some(HammingLookup::new(
-                    patterns.iter_literals().map(|(i, p)| (i, p.as_ref())),
+                    patterns.iter_literals(),
                     &sub_ids,
                     max_literal_len,
                     max_mismatches,
@@ -276,9 +294,7 @@ impl MatchAnyOp {
             return;
         }
         let distance = pattern_len.saturating_sub(matches);
-        let cell = self
-            .distance_counts
-            .get_or(|| RwLock::new(Vec::new()));
+        let cell = self.distance_counts.get_or(|| RwLock::new(Vec::new()));
         let mut counts = cell.write().unwrap();
         if distance >= counts.len() {
             counts.resize(distance + 1, 0);
@@ -305,7 +321,7 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                 self.max_literal_len * 2
             } else {
                 // Heuristic since we don't know text length yet, use reasonable default
-                512 
+                512
             };
 
             match self.match_type {
@@ -330,7 +346,6 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
         };
 
         for read in &mut reads {
-
             let text = read
                 .substring(self.label.str_type, self.label.label)
                 .map_err(|e| Error::NameError {
@@ -352,7 +367,8 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                         // Set sub and ambig attributes
                         let sub_bytes: Vec<u8> = sub_id.bytes().collect();
                         *mapping.data_mut(InlineString::new(b"sub")) = Data::Bytes(sub_bytes);
-                        *mapping.data_mut(InlineString::new(b"ambig")) = Data::Bytes(b"false".to_vec());
+                        *mapping.data_mut(InlineString::new(b"ambig")) =
+                            Data::Bytes(b"false".to_vec());
 
                         // For Hamming match, num_mappings() is 1
                         let start = mapping.start;
@@ -367,9 +383,8 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                     None => {
                         // Fast path no match - set up no-match result
                         let (start, len) = {
-                            let mapping = read
-                                .mapping(self.label.str_type, self.label.label)
-                                .unwrap();
+                            let mapping =
+                                read.mapping(self.label.str_type, self.label.label).unwrap();
                             (mapping.start, mapping.len)
                         };
 
@@ -384,7 +399,8 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
 
                         // Set empty/ambig attributes for no-match
                         *mapping.data_mut(InlineString::new(b"sub")) = Data::Bytes(Vec::new());
-                        *mapping.data_mut(InlineString::new(b"ambig")) = Data::Bytes(b"true".to_vec());
+                        *mapping.data_mut(InlineString::new(b"ambig")) =
+                            Data::Bytes(b"true".to_vec());
                         continue; // Skip slow path
                     }
                 }
@@ -404,7 +420,7 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                     ExactBoundedMatch { from, to } => {
                         let to = text.len().min(to);
                         (&text[from..to], 0, false)
-                    },
+                    }
                     Hamming(_) => (text, 0, false),
                     HammingPrefix(_) => (&text[..text.len().min(self.max_literal_len)], 0, false),
                     HammingSuffix(_) => {
@@ -419,13 +435,13 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                     } => {
                         let to = text.len().min(to);
                         (&text[from..to], 0, false)
-                    },
+                    }
                     GlobalAln(_) => (text, 0, false),
                     LocalAln { .. } => (text, 0, true),
                     PrefixAln { identity, .. } => (
-                        &text[..text
-                            .len()
-                            .min(self.max_literal_len + additional(identity, self.max_literal_len))],
+                        &text[..text.len().min(
+                            self.max_literal_len + additional(identity, self.max_literal_len),
+                        )],
                         0,
                         false,
                     ),
@@ -438,7 +454,11 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                     Edit(_) => (text, 0, false),
                     EditPrefix(t) => {
                         let max_edits = t.get(self.max_literal_len);
-                        (&text[..text.len().min(self.max_literal_len + max_edits)], 0, false)
+                        (
+                            &text[..text.len().min(self.max_literal_len + max_edits)],
+                            0,
+                            false,
+                        )
                     }
                     EditSuffix(t) => {
                         let max_edits = t.get(self.max_literal_len);
@@ -446,7 +466,11 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                         (&text[offset..], offset, false)
                     }
                     EditSearch(_) => (text, 0, true),
-                    EditBoundedMatch { threshold: _, from, to } => {
+                    EditBoundedMatch {
+                        threshold: _,
+                        from,
+                        to,
+                    } => {
                         let to = text.len().min(to);
                         (&text[from..to], 0, false)
                     }
@@ -478,14 +502,14 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
             let mut max_matches = 0;
             let mut max_pattern_len = 0;
             let mut max_pattern = None;
-            let mut max_pattern_idx = std::usize::MAX;
+            let mut max_pattern_idx = usize::MAX;
             let mut max_cut_pos1 = 0;
             let mut max_cut_pos2 = 0;
             let mut multimatches = false;
 
             for (pattern_idx, text_i) in seed_hits {
                 let pattern = &self.patterns.patterns()[pattern_idx];
-                let pattern_str_cow = pattern.get(&read).map_err(|e| Error::NameError {
+                let pattern_str_cow = pattern.get(read).map_err(|e| Error::NameError {
                     source: e,
                     read: read.clone(),
                     context: Self::NAME,
@@ -513,7 +537,8 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                         }
                     }
                     ExactSuffix => {
-                        if pattern_len <= text.len() && &text[text.len() - pattern_len..] == pattern_str
+                        if pattern_len <= text.len()
+                            && &text[text.len() - pattern_len..] == pattern_str
                         {
                             Some((pattern_len, text.len() - pattern_len, 0))
                         } else {
@@ -546,7 +571,8 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                     HammingPrefix(t) => {
                         if pattern_len <= text.len() {
                             let t = t.get(pattern_len);
-                            hamming(&text[..pattern_len], pattern_str, t).map(|m| (m, pattern_len, 0))
+                            hamming(&text[..pattern_len], pattern_str, t)
+                                .map(|m| (m, pattern_len, 0))
                         } else {
                             None
                         }
@@ -575,9 +601,7 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                             }
                         } else {
                             // No seed hit - fall back to full search
-                            hamming_search(text, pattern_str, t).map(|(m, start_idx, end_idx)| {
-                                (m, start_idx, end_idx)
-                            })
+                            hamming_search(text, pattern_str, t)
                         }
                     }
                     HammingBoundedMatch {
@@ -646,8 +670,7 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                     }
                     Edit(t) => {
                         let max_edits = t.get(pattern_len);
-                        edit_distance(text, pattern_str, max_edits)
-                            .map(|m| (m, pattern_len, 0))
+                        edit_distance(text, pattern_str, max_edits).map(|m| (m, pattern_len, 0))
                     }
                     EditPrefix(t) => {
                         let max_edits = t.get(pattern_len);
@@ -664,11 +687,16 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                         if let Some(text_i) = text_i {
                             // Seed hit - search around the seed position
                             let text_start = (text_i - (max_edits as isize)).max(0) as usize;
-                            let text_end = text.len().min((text_i + (pattern_len as isize) + (max_edits as isize)) as usize);
+                            let text_end = text.len().min(
+                                (text_i + (pattern_len as isize) + (max_edits as isize)) as usize,
+                            );
                             if text_end > text_start {
                                 let text_slice = &text[text_start..text_end];
-                                edit_search(text_slice, pattern_str, max_edits)
-                                    .map(|(m, start_idx, end_idx)| (m, text_start + start_idx, text_start + end_idx))
+                                edit_search(text_slice, pattern_str, max_edits).map(
+                                    |(m, start_idx, end_idx)| {
+                                        (m, text_start + start_idx, text_start + end_idx)
+                                    },
+                                )
                             } else {
                                 None
                             }
@@ -677,7 +705,11 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                             edit_search(text, pattern_str, max_edits)
                         }
                     }
-                    EditBoundedMatch { threshold: t, from, to } => {
+                    EditBoundedMatch {
+                        threshold: t,
+                        from,
+                        to,
+                    } => {
                         let max_edits = t.get(pattern_len);
                         let to_exclusive = text.len().min(to + 1);
                         let text_around = &text[from..to_exclusive];
@@ -724,7 +756,7 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                 for (&attr, data) in self.patterns.attr_names().iter().zip(pattern_attrs) {
                     *mapping.data_mut(attr) = data.clone();
                 }
-                
+
                 match self.match_type.num_mappings() {
                     1 => {
                         let start = mapping.start;
@@ -770,9 +802,7 @@ impl<T: crate::trace::Trace> GraphNode<T> for MatchAnyOp {
                 }
             } else {
                 let (start, len) = {
-                    let mapping = read
-                        .mapping(self.label.str_type, self.label.label)
-                        .unwrap();
+                    let mapping = read.mapping(self.label.str_type, self.label.label).unwrap();
                     (mapping.start, mapping.len)
                 };
 
@@ -950,20 +980,20 @@ fn hamming_search(a: &[u8], b: &[u8], threshold: usize) -> Option<(usize, usize,
 fn edit_distance(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<usize> {
     let m = pattern.len();
     let n = text.len();
-    
+
     if m == 0 {
         return if n <= max_edits { Some(m) } else { None };
     }
     if n == 0 {
         return if m <= max_edits { Some(0) } else { None };
     }
-    
+
     // For full match, lengths should be similar within edit distance
-    let len_diff = if n > m { n - m } else { m - n };
+    let len_diff = n.abs_diff(m);
     if len_diff > max_edits {
         return None;
     }
-    
+
     // Use Myers' bit-vector for patterns up to 64bp
     if m <= 64 {
         edit_distance_myers(text, pattern, max_edits)
@@ -976,27 +1006,27 @@ fn edit_distance(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<usize>
 fn edit_distance_myers(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<usize> {
     let m = pattern.len();
     let _n = text.len();
-    
+
     // Build pattern bitmasks for each character
     let mut peq = [0u64; 256];
     for (i, &c) in pattern.iter().enumerate() {
         peq[c as usize] |= 1u64 << i;
     }
-    
+
     // Initialize bit vectors
     let mut pv: u64 = !0u64; // all 1s
-    let mut mv: u64 = 0u64;  // all 0s
+    let mut mv: u64 = 0u64; // all 0s
     let mut score = m;
     let high_bit = 1u64 << (m - 1);
-    
+
     for &c in text {
         let eq = peq[c as usize];
         let xv = eq | mv;
         let xh = ((eq & pv).wrapping_add(pv)) ^ pv | eq;
-        
+
         let ph = mv | !(xh | pv);
         let mh = pv & xh;
-        
+
         // Update score
         if (ph & high_bit) != 0 {
             score += 1;
@@ -1004,12 +1034,12 @@ fn edit_distance_myers(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<
         if (mh & high_bit) != 0 {
             score -= 1;
         }
-        
+
         // Shift for next iteration
         pv = (mh << 1) | !(xv | (ph << 1));
         mv = (ph << 1) & xv;
     }
-    
+
     if score <= max_edits {
         Some(m.saturating_sub(score))
     } else {
@@ -1021,36 +1051,34 @@ fn edit_distance_myers(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<
 fn edit_distance_dp(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<usize> {
     let m = pattern.len();
     let n = text.len();
-    
+
     // Use two rows for space efficiency
     let mut prev = vec![0usize; m + 1];
     let mut curr = vec![0usize; m + 1];
-    
+
     // Initialize first row
-    for j in 0..=m {
-        prev[j] = j;
+    for (j, val) in prev.iter_mut().enumerate() {
+        *val = j;
     }
-    
+
     for i in 1..=n {
         curr[0] = i;
         let mut min_in_row = curr[0];
-        
+
         for j in 1..=m {
             let cost = if text[i - 1] == pattern[j - 1] { 0 } else { 1 };
-            curr[j] = (prev[j - 1] + cost)
-                .min(prev[j] + 1)
-                .min(curr[j - 1] + 1);
+            curr[j] = (prev[j - 1] + cost).min(prev[j] + 1).min(curr[j - 1] + 1);
             min_in_row = min_in_row.min(curr[j]);
         }
-        
+
         // Early termination if minimum in row exceeds threshold
         if min_in_row > max_edits {
             return None;
         }
-        
+
         std::mem::swap(&mut prev, &mut curr);
     }
-    
+
     let edits = prev[m];
     if edits <= max_edits {
         Some(m.saturating_sub(edits))
@@ -1065,11 +1093,11 @@ fn edit_distance_dp(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<usi
 fn edit_search(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usize, usize, usize)> {
     let m = pattern.len();
     let n = text.len();
-    
+
     if m == 0 || n == 0 {
         return None;
     }
-    
+
     // Use Myers' bit-vector semi-global search for patterns up to 64bp
     if m <= 64 {
         edit_search_myers(text, pattern, max_edits)
@@ -1081,7 +1109,11 @@ fn edit_search(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usize, 
 /// Myers' bit-vector algorithm for semi-global edit distance search (patterns up to 64bp).
 /// Uses a forward pass to find the best end position, then a reverse DP pass to find
 /// the exact start position.
-fn edit_search_myers(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usize, usize, usize)> {
+fn edit_search_myers(
+    text: &[u8],
+    pattern: &[u8],
+    max_edits: usize,
+) -> Option<(usize, usize, usize)> {
     let m = pattern.len();
 
     // Build pattern bitmasks
@@ -1136,6 +1168,7 @@ fn edit_search_myers(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(u
 /// Given that the best alignment ends at text[..end_pos] with `edits` edits,
 /// align the reversed pattern against the reversed text suffix to find where
 /// the alignment begins.
+#[allow(clippy::needless_range_loop)]
 fn find_start_reverse_dp(text: &[u8], pattern: &[u8], edits: usize) -> usize {
     let m = pattern.len();
     let n = text.len();
@@ -1155,9 +1188,7 @@ fn find_start_reverse_dp(text: &[u8], pattern: &[u8], edits: usize) -> usize {
         curr[0] = 0; // Free gaps at start of reversed text (= free gaps at end of original)
         for j in 1..=m {
             let cost = if text[n - i] == pattern[m - j] { 0 } else { 1 };
-            curr[j] = (prev[j - 1] + cost)
-                .min(prev[j] + 1)
-                .min(curr[j - 1] + 1);
+            curr[j] = (prev[j - 1] + cost).min(prev[j] + 1).min(curr[j - 1] + 1);
         }
         if curr[m] <= edits && curr[m] <= best_score {
             best_score = curr[m];
@@ -1172,6 +1203,7 @@ fn find_start_reverse_dp(text: &[u8], pattern: &[u8], edits: usize) -> usize {
 /// DP-based semi-global edit distance search for longer patterns.
 /// Uses a forward pass to find the best end position, then a reverse DP pass to find
 /// the exact start position.
+#[allow(clippy::needless_range_loop)]
 fn edit_search_dp(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usize, usize, usize)> {
     let m = pattern.len();
     let n = text.len();
@@ -1193,9 +1225,7 @@ fn edit_search_dp(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usiz
 
         for j in 1..=m {
             let cost = if text[i - 1] == pattern[j - 1] { 0 } else { 1 };
-            curr[j] = (prev[j - 1] + cost)
-                .min(prev[j] + 1)
-                .min(curr[j - 1] + 1);
+            curr[j] = (prev[j - 1] + cost).min(prev[j] + 1).min(curr[j - 1] + 1);
         }
 
         // Check if this is a valid end position (free gaps at text end)
@@ -1221,6 +1251,7 @@ fn edit_search_dp(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usiz
 /// Uses a DP where gaps at the text start DO cost (alignment must begin at position 0),
 /// but gaps at the text end are free (the match can end anywhere).
 /// Returns (matches, end_position) where matches = pattern_len - edits.
+#[allow(clippy::needless_range_loop)]
 fn edit_prefix(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usize, usize)> {
     let m = pattern.len();
 
@@ -1248,10 +1279,12 @@ fn edit_prefix(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usize, 
         curr[0] = i; // Gaps at text start DO cost (unlike semi-global search)
 
         for j in 1..=m {
-            let cost = if text_prefix[i - 1] == pattern[j - 1] { 0 } else { 1 };
-            curr[j] = (prev[j - 1] + cost)
-                .min(prev[j] + 1)
-                .min(curr[j - 1] + 1);
+            let cost = if text_prefix[i - 1] == pattern[j - 1] {
+                0
+            } else {
+                1
+            };
+            curr[j] = (prev[j - 1] + cost).min(prev[j] + 1).min(curr[j - 1] + 1);
         }
 
         // Free gaps at text end: check if full pattern is matched at this text position
@@ -1274,6 +1307,7 @@ fn edit_prefix(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usize, 
 /// Uses a DP where gaps at the text end DO cost (alignment must end at the last position),
 /// but gaps at the text start are free (the match can begin anywhere).
 /// Returns (matches, start_position) where matches = pattern_len - edits.
+#[allow(clippy::needless_range_loop)]
 fn edit_suffix(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usize, usize)> {
     let m = pattern.len();
     let n = text.len();
@@ -1310,10 +1344,12 @@ fn edit_suffix(text: &[u8], pattern: &[u8], max_edits: usize) -> Option<(usize, 
 
         for j in 1..=m {
             // Traverse both text and pattern in reverse
-            let cost = if text_suffix[sn - i] == pattern[m - j] { 0 } else { 1 };
-            curr[j] = (prev[j - 1] + cost)
-                .min(prev[j] + 1)
-                .min(curr[j - 1] + 1);
+            let cost = if text_suffix[sn - i] == pattern[m - j] {
+                0
+            } else {
+                1
+            };
+            curr[j] = (prev[j - 1] + cost).min(prev[j] + 1).min(curr[j - 1] + 1);
         }
 
         // Free gaps at text start: check if full pattern is matched at this text position
@@ -1692,11 +1728,17 @@ mod edit_distance_tests {
         let text = b"NNNACGTNNNN";
         let pattern = b"ACGT";
         let result = edit_prefix(text, pattern, 3);
-        assert!(result.is_some(), "there IS a valid prefix alignment within 3 edits");
+        assert!(
+            result.is_some(),
+            "there IS a valid prefix alignment within 3 edits"
+        );
         let (matches, end) = result.unwrap();
         // Correct: prefix alignment deletes NNN (3 edits) -> matches = 4 - 3 = 1
         // Buggy: finds internal exact match (0 edits) -> matches = 4
-        assert_eq!(matches, 1, "prefix match should report 1 match (3 edits for deleting NNN)");
+        assert_eq!(
+            matches, 1,
+            "prefix match should report 1 match (3 edits for deleting NNN)"
+        );
         assert_eq!(end, 7, "should consume 7 text bytes");
     }
 
@@ -1707,7 +1749,10 @@ mod edit_distance_tests {
         let text = b"XACGTNNNN";
         let pattern = b"ACGT";
         let result = edit_prefix(text, pattern, 1);
-        assert!(result.is_some(), "should find prefix match with 1 insertion");
+        assert!(
+            result.is_some(),
+            "should find prefix match with 1 insertion"
+        );
         let (matches, end) = result.unwrap();
         assert_eq!(matches, 3, "should report 3 matches (1 edit)");
         assert_eq!(end, 5, "should consume 5 text bytes");
@@ -1722,7 +1767,7 @@ mod edit_distance_tests {
         // Place pattern at position 10 with 1 substitution in the middle (pos 34: T->N)
         let mut placed = pattern.to_vec();
         placed[34] = b'X'; // 1 substitution in the middle
-        // Use 'T' padding to be distinct from the substituted 'X'
+                           // Use 'T' padding to be distinct from the substituted 'X'
         let mut text = vec![b'T'; 10];
         text.extend_from_slice(&placed);
         text.extend_from_slice(&[b'T'; 10]);
@@ -1817,12 +1862,139 @@ mod edit_distance_tests {
         let text = b"NNNNACGTNNN";
         let pattern = b"ACGT";
         let result = edit_suffix(text, pattern, 3);
-        assert!(result.is_some(), "there IS a valid suffix alignment within 3 edits");
+        assert!(
+            result.is_some(),
+            "there IS a valid suffix alignment within 3 edits"
+        );
         let (matches, start) = result.unwrap();
         // Correct: suffix alignment deletes trailing NNN (3 edits) -> matches = 4 - 3 = 1
         // Buggy: finds internal exact match (0 edits) -> matches = 4
-        assert_eq!(matches, 1, "suffix match should report 1 match (3 edits for deleting NNN)");
+        assert_eq!(
+            matches, 1,
+            "suffix match should report 1 match (3 edits for deleting NNN)"
+        );
         assert_eq!(start, 4, "suffix match should start at position 4");
+    }
+
+    // -- Hamming distance tests --
+    #[test]
+    fn test_hamming_exact_match() {
+        let result = hamming(b"ACGT", b"ACGT", 4);
+        assert_eq!(result, Some(4));
+    }
+
+    #[test]
+    fn test_hamming_one_mismatch() {
+        let result = hamming(b"ACGT", b"ACGC", 3);
+        assert_eq!(result, Some(3));
+    }
+
+    #[test]
+    fn test_hamming_below_threshold() {
+        let result = hamming(b"NNNN", b"ACGT", 4);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_hamming_different_lengths() {
+        let result = hamming(b"ACG", b"ACGT", 3);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_hamming_long_sequence() {
+        let a = b"ACGTACGTACGTACGT";
+        let b_seq = b"ACGTACGTACGTACGT";
+        let result = hamming(a, b_seq, 16);
+        assert_eq!(result, Some(16));
+    }
+
+    #[test]
+    fn test_hamming_long_with_mismatches() {
+        let a = b"ACGTACGTACGTACGT";
+        let mut b_seq = b"ACGTACGTACGTACGT".to_vec();
+        b_seq[0] = b'N';
+        b_seq[8] = b'N';
+        let result = hamming(a, &b_seq, 14);
+        assert_eq!(result, Some(14));
+    }
+
+    #[test]
+    fn test_hamming_search_exact() {
+        let text = b"NNNNNACGTNNNNNN";
+        let pattern = b"ACGT";
+        let result = hamming_search(text, pattern, 4);
+        assert!(result.is_some());
+        let (matches, start, end) = result.unwrap();
+        assert_eq!(matches, 4);
+        assert_eq!(start, 5);
+        assert_eq!(end, 9);
+    }
+
+    #[test]
+    fn test_hamming_search_with_mismatch() {
+        let text = b"NNNNNACGCNNNNNN";
+        let pattern = b"ACGT";
+        let result = hamming_search(text, pattern, 3);
+        assert!(result.is_some());
+        let (matches, start, end) = result.unwrap();
+        assert_eq!(matches, 3);
+        assert_eq!(start, 5);
+        assert_eq!(end, 9);
+    }
+
+    #[test]
+    fn test_hamming_search_no_match() {
+        let text = b"NNNNNNNNNNNN";
+        let pattern = b"ACGT";
+        let result = hamming_search(text, pattern, 4);
+        assert!(result.is_none());
+    }
+
+    // -- Edit distance edge cases --
+    #[test]
+    fn test_edit_distance_empty_pattern() {
+        let result = edit_distance(b"ACGT", b"", 0);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_edit_distance_empty_text() {
+        let result = edit_distance(b"", b"ACGT", 4);
+        assert_eq!(result, Some(0));
+    }
+
+    #[test]
+    fn test_edit_distance_both_empty() {
+        let result = edit_distance(b"", b"", 0);
+        assert_eq!(result, Some(0));
+    }
+
+    #[test]
+    fn test_edit_distance_length_diff_exceeds_max() {
+        let result = edit_distance(b"A", b"ACGTACGT", 2);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_edit_search_empty_pattern() {
+        let result = edit_search(b"ACGT", b"", 0);
+        // Empty pattern behavior depends on implementation
+        // Just verify it does not panic
+        let _ = result;
+    }
+
+    #[test]
+    fn test_edit_prefix_empty_pattern() {
+        let result = edit_prefix(b"ACGT", b"", 0);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), (0, 0));
+    }
+
+    #[test]
+    fn test_edit_suffix_empty_pattern() {
+        let result = edit_suffix(b"ACGT", b"", 0);
+        assert!(result.is_some());
     }
 
     #[test]
@@ -1832,7 +2004,10 @@ mod edit_distance_tests {
         let text = b"NNNNACGTX";
         let pattern = b"ACGT";
         let result = edit_suffix(text, pattern, 1);
-        assert!(result.is_some(), "should find suffix match with 1 insertion");
+        assert!(
+            result.is_some(),
+            "should find suffix match with 1 insertion"
+        );
         let (matches, start) = result.unwrap();
         assert_eq!(matches, 3, "should report 3 matches (1 edit)");
         assert_eq!(start, 4, "should start at position 4");

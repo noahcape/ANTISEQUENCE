@@ -1,8 +1,8 @@
 //! Lookup operation for mapping barcode values to sample identifiers.
 
-use std::path::Path;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::path::Path;
 
 use rustc_hash::FxHashMap;
 
@@ -96,7 +96,12 @@ impl LookupOp {
         default_value: impl Into<Vec<u8>>,
     ) -> Result<Self> {
         let lookup_table = Self::load_tsv(tsv_path)?;
-        Ok(Self::new(input_label, output_attr, lookup_table, default_value))
+        Ok(Self::new(
+            input_label,
+            output_attr,
+            lookup_table,
+            default_value,
+        ))
     }
 }
 
@@ -104,16 +109,17 @@ impl<T: Trace> GraphNode<T> for LookupOp {
     fn run_inner(&self, mut reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
         for read in &mut reads {
             // Get the input sequence bytes and clone to avoid borrow issues
-            let input_bytes = match read.substring(self.input_label.str_type, self.input_label.label) {
-                Ok(bytes) => bytes.to_vec(),
-                Err(e) => {
-                    return Err(Error::NameError {
-                        source: e,
-                        read: read.clone(),
-                        context: Self::NAME,
-                    });
-                }
-            };
+            let input_bytes =
+                match read.substring(self.input_label.str_type, self.input_label.label) {
+                    Ok(bytes) => bytes.to_vec(),
+                    Err(e) => {
+                        return Err(Error::NameError {
+                            source: e,
+                            read: read.clone(),
+                            context: Self::NAME,
+                        });
+                    }
+                };
 
             // Look up the value in the table
             let output_value = self
@@ -123,7 +129,11 @@ impl<T: Trace> GraphNode<T> for LookupOp {
                 .unwrap_or_else(|| self.default_value.clone());
 
             // Set the output attribute
-            match read.data_mut(self.input_label.str_type, self.input_label.label, self.output_attr) {
+            match read.data_mut(
+                self.input_label.str_type,
+                self.input_label.label,
+                self.output_attr,
+            ) {
                 Ok(data) => *data = Data::Bytes(output_value),
                 Err(e) => {
                     return Err(Error::NameError {
@@ -158,12 +168,14 @@ mod tests {
         let mut read = Read::new();
         let origin = Arc::new(Origin::File("test.fastq".into()));
         read.add_fastq(2, b"test_read", seq, &vec![b'I'; seq.len()], origin, 0);
-        
+
         // Add a mapping for bc1 label at position 0-8
-        read.str_mappings_mut(StrType::Seq(2))
-            .unwrap()
-            .add_mapping(Some(InlineString::new(b"bc1")), 0, 8.min(seq.len()));
-        
+        read.str_mappings_mut(StrType::Seq(2)).unwrap().add_mapping(
+            Some(InlineString::new(b"bc1")),
+            0,
+            8.min(seq.len()),
+        );
+
         read
     }
 
@@ -185,7 +197,11 @@ mod tests {
         let reads = result.unwrap();
 
         let sample = reads[0]
-            .data(StrType::Seq(2), InlineString::new(b"bc1"), InlineString::new(b"sample"))
+            .data(
+                StrType::Seq(2),
+                InlineString::new(b"bc1"),
+                InlineString::new(b"sample"),
+            )
             .unwrap();
 
         match sample {
@@ -211,7 +227,11 @@ mod tests {
         let reads = result.unwrap();
 
         let sample = reads[0]
-            .data(StrType::Seq(2), InlineString::new(b"bc1"), InlineString::new(b"sample"))
+            .data(
+                StrType::Seq(2),
+                InlineString::new(b"bc1"),
+                InlineString::new(b"sample"),
+            )
             .unwrap();
 
         match sample {
@@ -243,7 +263,11 @@ mod tests {
 
         let get_sample = |read: &Read| -> Vec<u8> {
             match read
-                .data(StrType::Seq(2), InlineString::new(b"bc1"), InlineString::new(b"sample"))
+                .data(
+                    StrType::Seq(2),
+                    InlineString::new(b"bc1"),
+                    InlineString::new(b"sample"),
+                )
                 .unwrap()
             {
                 Data::Bytes(v) => v.clone(),

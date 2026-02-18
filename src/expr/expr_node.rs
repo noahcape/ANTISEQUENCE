@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::marker::{Send, Sync};
-use std::ops::{Bound, RangeBounds};
+use std::ops::{Add, Bound, Div, Mul, Not, RangeBounds, Sub};
 
 use crate::errors::NameError;
 use crate::expr::*;
@@ -62,11 +62,6 @@ impl Expr {
     binary_fn!(or, OrNode);
     binary_fn!(xor, XorNode);
 
-    binary_fn!(add, AddNode);
-    binary_fn!(sub, SubNode);
-    binary_fn!(mul, MulNode);
-    binary_fn!(div, DivNode);
-
     binary_fn!(gt, GtNode);
     binary_fn!(lt, LtNode);
     binary_fn!(ge, GeNode);
@@ -74,8 +69,6 @@ impl Expr {
     binary_fn!(eq, EqNode);
 
     binary_fn!(concat, ConcatNode);
-
-    unary_fn!(not, NotNode, boolean);
     unary_fn!(len, LenNode, string);
     unary_fn!(rev, RevNode, string);
     unary_fn!(revcomp, RevCompNode, string);
@@ -175,8 +168,7 @@ impl Expr {
     ///
     /// Returns whether the result is just a constant.
     pub fn optimize(&mut self) -> bool {
-        let constant = self.propagate_const();
-        constant
+        self.propagate_const()
     }
 
     fn propagate_const(&mut self) -> bool {
@@ -189,6 +181,63 @@ impl Expr {
         let data = self.eval(&temp, false).unwrap_or_else(|e| panic!("{e}"));
         self.node = Box::new(Data::from(data));
         true
+    }
+}
+
+impl<T: Into<Expr>> Add<T> for Expr {
+    type Output = Expr;
+    fn add(self, rhs: T) -> Expr {
+        Expr {
+            node: Box::new(AddNode {
+                left: self,
+                right: rhs.into(),
+            }),
+        }
+    }
+}
+
+impl<T: Into<Expr>> Sub<T> for Expr {
+    type Output = Expr;
+    fn sub(self, rhs: T) -> Expr {
+        Expr {
+            node: Box::new(SubNode {
+                left: self,
+                right: rhs.into(),
+            }),
+        }
+    }
+}
+
+impl<T: Into<Expr>> Mul<T> for Expr {
+    type Output = Expr;
+    fn mul(self, rhs: T) -> Expr {
+        Expr {
+            node: Box::new(MulNode {
+                left: self,
+                right: rhs.into(),
+            }),
+        }
+    }
+}
+
+impl<T: Into<Expr>> Div<T> for Expr {
+    type Output = Expr;
+    fn div(self, rhs: T) -> Expr {
+        Expr {
+            node: Box::new(DivNode {
+                left: self,
+                right: rhs.into(),
+            }),
+        }
+    }
+}
+
+impl Not for Expr {
+    type Output = Expr;
+    fn not(self) -> Expr {
+        Expr {
+            node: Box::new(NotNode { boolean: self }),
+        }
     }
 }
 
@@ -348,9 +397,9 @@ impl ExprNode for NormalizeNode {
     ) -> std::result::Result<EvalData<'a>, NameError> {
         let string = expect_bytes(self.string.eval(read, use_qual)?)?;
         let range = map_eval_range(&self.range, read, use_qual, |b| b as usize)?;
-        let (start, end) = range_inclusive_exclusive(&range, std::usize::MAX);
+        let (start, end) = range_inclusive_exclusive(&range, usize::MAX);
 
-        if end == std::usize::MAX {
+        if end == usize::MAX {
             return Err(NameError::Other(
                 "the end bound must be bounded for normalization",
             ));
@@ -366,10 +415,10 @@ impl ExprNode for NormalizeNode {
 
         let mut normalized = string.into_owned();
         let pad_char = if use_qual { UNKNOWN_QUAL } else { NUC[0] };
-        normalized.extend(std::iter::repeat(pad_char).take(pad_len));
+        normalized.extend(std::iter::repeat_n(pad_char, pad_len));
 
         if use_qual {
-            normalized.extend(std::iter::repeat(UNKNOWN_QUAL).take(var_len));
+            normalized.extend(std::iter::repeat_n(UNKNOWN_QUAL, var_len));
         } else {
             normalized.extend(
                 (0..var_len).map(|i| unsafe { *NUC.as_ptr().add((pad_len >> (i * 2)) & 0b11) }),
@@ -426,11 +475,10 @@ impl ExprNode for PadNode {
                 Cow::Owned(padded)
             }
             Right => {
-                let mut padded = string.to_owned();
-                padded
-                    .to_mut()
-                    .extend(std::iter::repeat(pad_char[0]).take(len - string.len()));
-                padded
+                let pad_len = len - string.len();
+                let mut padded = string.into_owned();
+                padded.extend(std::iter::repeat_n(pad_char[0], pad_len));
+                Cow::Owned(padded)
             }
         };
         Ok(EvalData::Bytes(padded))
@@ -1103,4 +1151,427 @@ fn range_inclusive_exclusive(range: &(Bound<usize>, Bound<usize>), len: usize) -
         Bound::Unbounded => len,
     };
     (start, end)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_read() -> Read {
+        Read::new()
+    }
+
+    #[test]
+    fn test_expr_from_bool() {
+        let e = Expr::from(true);
+        let r = empty_read();
+        assert!(e.eval_bool(&r).unwrap());
+        let e2 = Expr::from(false);
+        assert!(!(e2.eval_bool(&r).unwrap()));
+    }
+
+    #[test]
+    fn test_expr_from_int_types() {
+        let r = empty_read();
+        let e1 = Expr::from(42isize);
+        assert_eq!(e1.eval_int(&r).unwrap(), 42);
+        let e2 = Expr::from(100i64);
+        assert_eq!(e2.eval_int(&r).unwrap(), 100);
+        let e3 = Expr::from(10u32);
+        assert_eq!(e3.eval_int(&r).unwrap(), 10);
+        let e4 = Expr::from(5usize);
+        assert_eq!(e4.eval_int(&r).unwrap(), 5);
+    }
+
+    #[test]
+    fn test_expr_from_float_types() {
+        let r = empty_read();
+        let e1 = Expr::from(std::f64::consts::PI);
+        match e1.eval(&r, false).unwrap() {
+            EvalData::Float(f) => assert!((f - std::f64::consts::PI).abs() < 0.001),
+            _ => panic!("expected float"),
+        }
+        let e2 = Expr::from(2.5f32);
+        match e2.eval(&r, false).unwrap() {
+            EvalData::Float(f) => assert!((f - 2.5).abs() < 0.01),
+            _ => panic!("expected float"),
+        }
+    }
+
+    #[test]
+    fn test_expr_from_bytes_types() {
+        let r = empty_read();
+        let e1 = Expr::from(b"ACGT".to_vec());
+        assert_eq!(e1.eval_bytes(&r, false).unwrap().as_ref(), b"ACGT");
+        let e2 = Expr::from("hello");
+        assert_eq!(e2.eval_bytes(&r, false).unwrap().as_ref(), b"hello");
+        let e3 = Expr::from(String::from("world"));
+        assert_eq!(e3.eval_bytes(&r, false).unwrap().as_ref(), b"world");
+    }
+
+    #[test]
+    fn test_and() {
+        let r = empty_read();
+        let e1 = Expr::from(true).and(true);
+        assert!(e1.eval_bool(&r).unwrap());
+        let e2 = Expr::from(true).and(false);
+        assert!(!(e2.eval_bool(&r).unwrap()));
+        let e3 = Expr::from(false).and(true);
+        assert!(!(e3.eval_bool(&r).unwrap()));
+    }
+
+    #[test]
+    fn test_or() {
+        let r = empty_read();
+        let e1 = Expr::from(true).or(false);
+        assert!(e1.eval_bool(&r).unwrap());
+        let e2 = Expr::from(false).or(false);
+        assert!(!(e2.eval_bool(&r).unwrap()));
+    }
+
+    #[test]
+    fn test_xor() {
+        let r = empty_read();
+        let e1 = Expr::from(true).xor(false);
+        assert!(e1.eval_bool(&r).unwrap());
+        let e2 = Expr::from(true).xor(true);
+        assert!(!(e2.eval_bool(&r).unwrap()));
+    }
+
+    #[test]
+    fn test_not() {
+        let r = empty_read();
+        let e1 = Expr::from(true).not();
+        assert!(!(e1.eval_bool(&r).unwrap()));
+        let e2 = Expr::from(false).not();
+        assert!(e2.eval_bool(&r).unwrap());
+    }
+
+    #[test]
+    fn test_arithmetic_int() {
+        let r = empty_read();
+        let e1 = Expr::from(3isize).add(4isize);
+        assert_eq!(e1.eval_int(&r).unwrap(), 7);
+        let e2 = Expr::from(10isize).sub(3isize);
+        assert_eq!(e2.eval_int(&r).unwrap(), 7);
+        let e3 = Expr::from(4isize).mul(5isize);
+        assert_eq!(e3.eval_int(&r).unwrap(), 20);
+        let e4 = Expr::from(20isize).div(4isize);
+        assert_eq!(e4.eval_int(&r).unwrap(), 5);
+    }
+
+    #[test]
+    fn test_arithmetic_float() {
+        let r = empty_read();
+        let e1 = Expr::from(1.5f64).add(2.5f64);
+        match e1.eval(&r, false).unwrap() {
+            EvalData::Float(f) => assert!((f - 4.0).abs() < 0.001),
+            _ => panic!("expected float"),
+        }
+        let e2 = Expr::from(5.0f64).sub(2.0f64);
+        match e2.eval(&r, false).unwrap() {
+            EvalData::Float(f) => assert!((f - 3.0).abs() < 0.001),
+            _ => panic!("expected float"),
+        }
+        let e3 = Expr::from(3.0f64).mul(2.0f64);
+        match e3.eval(&r, false).unwrap() {
+            EvalData::Float(f) => assert!((f - 6.0).abs() < 0.001),
+            _ => panic!("expected float"),
+        }
+        let e4 = Expr::from(10.0f64).div(4.0f64);
+        match e4.eval(&r, false).unwrap() {
+            EvalData::Float(f) => assert!((f - 2.5).abs() < 0.001),
+            _ => panic!("expected float"),
+        }
+    }
+
+    #[test]
+    fn test_comparisons_int() {
+        let r = empty_read();
+        let e1 = Expr::from(5isize).gt(3isize);
+        assert!(e1.eval_bool(&r).unwrap());
+        let e2 = Expr::from(3isize).lt(5isize);
+        assert!(e2.eval_bool(&r).unwrap());
+        let e3 = Expr::from(5isize).ge(5isize);
+        assert!(e3.eval_bool(&r).unwrap());
+        let e4 = Expr::from(5isize).le(5isize);
+        assert!(e4.eval_bool(&r).unwrap());
+        let e5 = Expr::from(5isize).eq(5isize);
+        assert!(e5.eval_bool(&r).unwrap());
+        let e6 = Expr::from(5isize).eq(6isize);
+        assert!(!(e6.eval_bool(&r).unwrap()));
+    }
+
+    #[test]
+    fn test_comparisons_float() {
+        let r = empty_read();
+        let e1 = Expr::from(5.0f64).gt(3.0f64);
+        assert!(e1.eval_bool(&r).unwrap());
+        let e2 = Expr::from(3.0f64).lt(5.0f64);
+        assert!(e2.eval_bool(&r).unwrap());
+        let e3 = Expr::from(5.0f64).ge(5.0f64);
+        assert!(e3.eval_bool(&r).unwrap());
+        let e4 = Expr::from(5.0f64).le(5.0f64);
+        assert!(e4.eval_bool(&r).unwrap());
+        let e5 = Expr::from(5.0f64).eq(5.0f64);
+        assert!(e5.eval_bool(&r).unwrap());
+    }
+
+    #[test]
+    fn test_eq_bool_and_bytes() {
+        let r = empty_read();
+        let e1 = Expr::from(true).eq(true);
+        assert!(e1.eval_bool(&r).unwrap());
+        let e2 = Expr::from(b"ACGT".to_vec()).eq(b"ACGT".to_vec());
+        assert!(e2.eval_bool(&r).unwrap());
+        let e3 = Expr::from(b"ACGT".to_vec()).eq(b"TGCA".to_vec());
+        assert!(!(e3.eval_bool(&r).unwrap()));
+    }
+
+    #[test]
+    fn test_concat() {
+        let r = empty_read();
+        let e = Expr::from(b"AC".to_vec()).concat(b"GT".to_vec());
+        assert_eq!(e.eval_bytes(&r, false).unwrap().as_ref(), b"ACGT");
+    }
+
+    #[test]
+    fn test_len() {
+        let r = empty_read();
+        let e = Expr::from(b"ACGT".to_vec()).len();
+        assert_eq!(e.eval_int(&r).unwrap(), 4);
+    }
+
+    #[test]
+    fn test_rev() {
+        let r = empty_read();
+        let e = Expr::from(b"ACGT".to_vec()).rev();
+        assert_eq!(e.eval_bytes(&r, false).unwrap().as_ref(), b"TGCA");
+    }
+
+    #[test]
+    fn test_revcomp() {
+        let r = empty_read();
+        let e = Expr::from(b"ACGT".to_vec()).revcomp();
+        assert_eq!(e.eval_bytes(&r, false).unwrap().as_ref(), b"ACGT");
+        let e2 = Expr::from(b"AACC".to_vec()).revcomp();
+        assert_eq!(e2.eval_bytes(&r, false).unwrap().as_ref(), b"GGTT");
+    }
+
+    #[test]
+    fn test_repeat() {
+        let r = empty_read();
+        let e = Expr::from(b"AC".to_vec()).repeat(3isize);
+        assert_eq!(e.eval_bytes(&r, false).unwrap().as_ref(), b"ACACAC");
+    }
+
+    #[test]
+    fn test_slice_variants() {
+        let r = empty_read();
+        let e1 = Expr::from(b"ACGTACGT".to_vec()).slice(2usize..6usize);
+        assert_eq!(e1.eval_bytes(&r, false).unwrap().as_ref(), b"GTAC");
+        let e2 = Expr::from(b"ACGTACGT".to_vec()).slice(4usize..);
+        assert_eq!(e2.eval_bytes(&r, false).unwrap().as_ref(), b"ACGT");
+        let e3 = Expr::from(b"ACGTACGT".to_vec()).slice(..4usize);
+        assert_eq!(e3.eval_bytes(&r, false).unwrap().as_ref(), b"ACGT");
+        let e4 = Expr::from(b"ACGTACGT".to_vec()).slice(-4isize..);
+        assert_eq!(e4.eval_bytes(&r, false).unwrap().as_ref(), b"ACGT");
+    }
+
+    #[test]
+    fn test_in_bounds() {
+        let r = empty_read();
+        let e1 = Expr::from(5isize).in_bounds(1isize..10isize);
+        assert!(e1.eval_bool(&r).unwrap());
+        let e2 = Expr::from(15isize).in_bounds(1isize..10isize);
+        assert!(!(e2.eval_bool(&r).unwrap()));
+    }
+
+    #[test]
+    fn test_int_conversions() {
+        let r = empty_read();
+        let e1 = Expr::from(true).int();
+        assert_eq!(e1.eval_int(&r).unwrap(), 1);
+        let e2 = Expr::from(false).int();
+        assert_eq!(e2.eval_int(&r).unwrap(), 0);
+        let e3 = Expr::from(3.7f64).int();
+        assert_eq!(e3.eval_int(&r).unwrap(), 3);
+        let e4 = Expr::from(b"42".to_vec()).int();
+        assert_eq!(e4.eval_int(&r).unwrap(), 42);
+    }
+
+    #[test]
+    fn test_float_conversions() {
+        let r = empty_read();
+        let e1 = Expr::from(true).float();
+        match e1.eval(&r, false).unwrap() {
+            EvalData::Float(f) => assert!((f - 1.0).abs() < 0.001),
+            _ => panic!("expected float"),
+        }
+        let e2 = Expr::from(42isize).float();
+        match e2.eval(&r, false).unwrap() {
+            EvalData::Float(f) => assert!((f - 42.0).abs() < 0.001),
+            _ => panic!("expected float"),
+        }
+        let e3 = Expr::from(b"2.71".to_vec()).float();
+        match e3.eval(&r, false).unwrap() {
+            EvalData::Float(f) => assert!((f - 2.71).abs() < 0.001),
+            _ => panic!("expected float"),
+        }
+    }
+
+    #[test]
+    fn test_bytes_conversions() {
+        let r = empty_read();
+        let e1 = Expr::from(true).bytes();
+        assert_eq!(e1.eval_bytes(&r, false).unwrap().as_ref(), b"true");
+        let e2 = Expr::from(false).bytes();
+        assert_eq!(e2.eval_bytes(&r, false).unwrap().as_ref(), b"false");
+        let e3 = Expr::from(42isize).bytes();
+        assert_eq!(e3.eval_bytes(&r, false).unwrap().as_ref(), b"42");
+        let e4 = Expr::from(3.5f64).bytes();
+        assert_eq!(e4.eval_bytes(&r, false).unwrap().as_ref(), b"3.5");
+    }
+
+    #[test]
+    fn test_log4_roundup() {
+        assert_eq!(log4_roundup(1), 1);
+        assert_eq!(log4_roundup(3), 1);
+        assert_eq!(log4_roundup(4), 2);
+        assert_eq!(log4_roundup(16), 3);
+        assert_eq!(log4_roundup(64), 4);
+    }
+
+    #[test]
+    fn test_concat_all() {
+        let r = empty_read();
+        let e = concat_all(vec![
+            Expr::from(b"A".to_vec()),
+            Expr::from(b"C".to_vec()),
+            Expr::from(b"G".to_vec()),
+            Expr::from(b"T".to_vec()),
+        ]);
+        assert_eq!(e.eval_bytes(&r, false).unwrap().as_ref(), b"ACGT");
+    }
+
+    #[test]
+    fn test_fmt_expr_fn() {
+        let r = empty_read();
+        let e = fmt_expr("hello_world");
+        assert_eq!(e.eval_bytes(&r, false).unwrap().as_ref(), b"hello_world");
+    }
+
+    #[test]
+    fn test_label_exists_empty_read() {
+        let r = empty_read();
+        let e = label_exists("seq1.test");
+        assert!(!(e.eval_bool(&r).unwrap()));
+    }
+
+    #[test]
+    fn test_attr_exists_empty_read() {
+        let r = empty_read();
+        let e = attr_exists("seq1.test.attr");
+        assert!(!(e.eval_bool(&r).unwrap()));
+    }
+
+    #[test]
+    fn test_optimize_constant() {
+        let mut e = Expr::from(5isize).add(3isize);
+        let is_const = e.optimize();
+        assert!(is_const);
+        let r = empty_read();
+        assert_eq!(e.eval_int(&r).unwrap(), 8);
+    }
+
+    #[test]
+    fn test_optimize_with_label_not_constant() {
+        let mut e = Expr::from(label("seq1.test"));
+        assert!(!e.optimize());
+    }
+
+    #[test]
+    fn test_required_names() {
+        let e = Expr::from(42isize);
+        assert!(e.required_names().is_empty());
+        let e2 = Expr::from(label("seq1.test"));
+        assert_eq!(e2.required_names().len(), 1);
+    }
+
+    #[test]
+    fn test_eval_data_to_data() {
+        let d: Data = EvalData::Bool(true).into();
+        assert_eq!(d, Data::Bool(true));
+        let d: Data = EvalData::Int(42).into();
+        assert_eq!(d, Data::Int(42));
+        let d: Data = EvalData::Float(2.71).into();
+        assert_eq!(d, Data::Float(2.71));
+        let d: Data = EvalData::Bytes(Cow::Borrowed(b"test")).into();
+        assert_eq!(d, Data::Bytes(b"test".to_vec()));
+    }
+
+    #[test]
+    fn test_data_as_expr() {
+        let r = empty_read();
+        let e1 = Expr::from(Data::Bool(true));
+        assert!(e1.eval_bool(&r).unwrap());
+        let e2 = Expr::from(Data::Int(42));
+        assert_eq!(e2.eval_int(&r).unwrap(), 42);
+        let e3 = Expr::from(Data::Bytes(b"hello".to_vec()));
+        assert_eq!(e3.eval_bytes(&r, false).unwrap().as_ref(), b"hello");
+    }
+
+    #[test]
+    fn test_use_qual_mode() {
+        let r = empty_read();
+        let e = Expr::from(b"ACGT".to_vec());
+        let result = e.eval_bytes(&r, true).unwrap();
+        assert_eq!(result.len(), 4);
+        assert!(result.iter().all(|&b| b == b'I'));
+
+        let e2 = Expr::from(Data::Bytes(b"ACGT".to_vec()));
+        let result2 = e2.eval_bytes(&r, true).unwrap();
+        assert!(result2.iter().all(|&b| b == b'I'));
+    }
+
+    #[test]
+    fn test_revcomp_use_qual() {
+        let r = empty_read();
+        let e = Expr::from(b"ACGT".to_vec()).revcomp();
+        let result = e.eval_bytes(&r, true).unwrap();
+        assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn test_type_errors() {
+        let r = empty_read();
+        let e1 = Expr::from(42isize).and(true);
+        assert!(e1.eval_bool(&r).is_err());
+        let e2 = Expr::from(true).add(42isize);
+        assert!(e2.eval_int(&r).is_err());
+        let e3 = Expr::from(42isize).concat(true);
+        assert!(e3.eval_bytes(&r, false).is_err());
+        let e4 = Expr::from(42isize).repeat(3isize);
+        assert!(e4.eval_bytes(&r, false).is_err());
+        let e5 = Expr::from(42isize).eq(true);
+        assert!(e5.eval_bool(&r).is_err());
+    }
+
+    #[test]
+    fn test_expect_bool_from_bytes() {
+        let r = empty_read();
+        let e = Expr::from(b"yes".to_vec()).not().not();
+        assert!(e.eval_bool(&r).unwrap());
+    }
+
+    #[test]
+    fn test_chained_ops() {
+        let r = empty_read();
+        let e1 = Expr::from(2isize).add(3isize).mul(4isize);
+        assert_eq!(e1.eval_int(&r).unwrap(), 20);
+        let e2 = Expr::from(true).and(true).or(false);
+        assert!(e2.eval_bool(&r).unwrap());
+        let e3 = Expr::from(b"ACGT".to_vec()).concat(b"AAAA".to_vec()).len();
+        assert_eq!(e3.eval_int(&r).unwrap(), 8);
+    }
 }

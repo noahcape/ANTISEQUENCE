@@ -49,7 +49,7 @@ AAAATTTTCCCCGGGGATATAT
             overlap: 0.4,
         },
     ));
-    g.add(DbgOp::new());
+    g.add(DbgOp::create());
     g.add(TrimOp::new([label("seq2.adapter")]));
 
     // match anchor
@@ -71,7 +71,7 @@ AAAATTTTCCCCGGGGATATAT
 
     // clip the length of the second barcode
     g.add(CutOp::new(tr!(seq1._after_umi -> seq1.bc2, _), 10));
-    g.add(DbgOp::new());
+    g.add(DbgOp::create());
 
     // filter out invalid reads
     g.add(RetainOp::new(

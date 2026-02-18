@@ -2,6 +2,12 @@ use crate::graph::*;
 
 pub struct NullOutputOp;
 
+impl Default for NullOutputOp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NullOutputOp {
     const NAME: &'static str = "NullOutputOp";
 

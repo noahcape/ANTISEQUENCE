@@ -34,11 +34,11 @@ impl<T: Trace> GraphNode<T> for RetainOp {
                 }
             }
         });
-        
+
         if let Some(e) = error {
             return Err(e);
         }
-        
+
         if reads.is_empty() {
             Ok((None, false))
         } else {

@@ -43,7 +43,8 @@ impl<T: Trace> GraphNode<T> for SelectOp<T> {
                     source: e,
                     read: read.clone(),
                     context: Self::NAME,
-                })? {
+                })?
+            {
                 passing_positions.push(idx);
                 passing_reads.push(read);
             } else {
@@ -77,7 +78,11 @@ impl<T: Trace> GraphNode<T> for SelectOp<T> {
             }
         }
 
-        let final_res = if res_reads.is_empty() { None } else { Some(res_reads) };
+        let final_res = if res_reads.is_empty() {
+            None
+        } else {
+            Some(res_reads)
+        };
 
         trace.add(self.name(), start, &final_res);
         Ok((final_res, done))

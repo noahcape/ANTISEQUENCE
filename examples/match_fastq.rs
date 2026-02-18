@@ -15,9 +15,9 @@ fn main() {
             overlap: 0.5,
         },
     ));
-    g.add(DbgOp::new());
+    g.add(DbgOp::create());
     g.add(TrimOp::new([label("seq1.adapter")]));
-    g.add(DbgOp::new());
+    g.add(DbgOp::create());
     g.add(OutputFastqFileOp::from_file("example_output/match.fastq"));
     g.run().unwrap_or_else(|e| panic!("{e}"));
 }

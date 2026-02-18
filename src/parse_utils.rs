@@ -80,3 +80,73 @@ pub fn parse_fmt_expr(expr: &[u8]) -> Result<Vec<Expr>> {
 
     Ok(res)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_trim_ascii_whitespace() {
+        assert_eq!(
+            trim_ascii_whitespace(b"  hello  "),
+            Some(b"hello".as_slice())
+        );
+        assert_eq!(trim_ascii_whitespace(b"hello"), Some(b"hello".as_slice()));
+        assert_eq!(trim_ascii_whitespace(b"  "), None);
+        assert_eq!(trim_ascii_whitespace(b""), None);
+        assert_eq!(trim_ascii_whitespace(b" a "), Some(b"a".as_slice()));
+    }
+
+    #[test]
+    fn test_check_valid_name() {
+        assert!(check_valid_name(b"hello").is_some());
+        assert!(check_valid_name(b"test_123").is_some());
+        assert!(check_valid_name(b"*").is_some());
+        assert!(check_valid_name(b"ABC").is_some());
+        assert!(check_valid_name(b"has space").is_none());
+        assert!(check_valid_name(b"has.dot").is_none());
+        assert!(check_valid_name(b"has-dash").is_none());
+    }
+
+    #[test]
+    fn test_parse_fmt_expr_plain_text() {
+        let result = parse_fmt_expr(b"hello world").unwrap();
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_fmt_expr_with_label() {
+        let result = parse_fmt_expr(b"prefix{seq1.label}suffix").unwrap();
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_fmt_expr_nested_braces_error() {
+        let result = parse_fmt_expr(b"{{nested}}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_fmt_expr_unbalanced_brace() {
+        let result = parse_fmt_expr(b"unbalanced}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_fmt_expr_unclosed_brace() {
+        let result = parse_fmt_expr(b"{unclosed");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_fmt_expr_empty() {
+        let result = parse_fmt_expr(b"").unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_fmt_expr_escape() {
+        let result = parse_fmt_expr(b"hello\\{world").unwrap();
+        assert_eq!(result.len(), 1);
+    }
+}

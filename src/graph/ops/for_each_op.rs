@@ -34,7 +34,7 @@ pub struct DbgOp;
 
 impl DbgOp {
     /// Print each read to standard error.
-    pub fn new() -> ForEachOp<impl Fn(&mut Read) + Send + Sync> {
+    pub fn create() -> ForEachOp<impl Fn(&mut Read) + Send + Sync> {
         ForEachOp::new(|read| eprintln!("{read}"))
     }
 }
@@ -43,7 +43,7 @@ pub struct RemoveInternalOp;
 
 impl RemoveInternalOp {
     /// Remove mappings with labels that start with `_` ("internal" mappings).
-    pub fn new() -> ForEachOp<impl Fn(&mut Read) + Send + Sync> {
+    pub fn create() -> ForEachOp<impl Fn(&mut Read) + Send + Sync> {
         ForEachOp::new(|read| read.remove_internal())
     }
 }

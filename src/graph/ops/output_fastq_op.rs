@@ -1,10 +1,10 @@
+use parking_lot::Mutex;
+use std::borrow::Cow;
+use std::cell::RefCell;
 use std::fs::File;
-use std::io::{BufWriter, Write, IoSlice};
+use std::io::{BufWriter, IoSlice, Write};
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::borrow::Cow;
-use parking_lot::Mutex;
-use std::cell::RefCell;
 
 use rustc_hash::FxHashMap;
 use thread_local::ThreadLocal;
@@ -19,16 +19,23 @@ struct TlsOutputState {
 }
 
 impl TlsOutputState {
-    fn new() -> Self { Self { writers: FxHashMap::default(), bufs: FxHashMap::default() } }
+    fn new() -> Self {
+        Self {
+            writers: FxHashMap::default(),
+            bufs: FxHashMap::default(),
+        }
+    }
 }
 
 impl Drop for TlsOutputState {
     fn drop(&mut self) {
         for (k, buf) in self.bufs.iter_mut() {
-            if buf.is_empty() { continue; }
+            if buf.is_empty() {
+                continue;
+            }
             if let Some(w) = self.writers.get(k) {
                 let mut w = w.lock();
-                let _ = (&mut *w).write_all(buf);
+                let _ = (*w).write_all(buf);
                 buf.clear();
             }
         }
@@ -39,11 +46,13 @@ thread_local! {
     static OUTPUT_TLS: std::cell::RefCell<TlsOutputState> = std::cell::RefCell::new(TlsOutputState::new());
 }
 
+type FileWriterMap = FxHashMap<Vec<u8>, Arc<Mutex<dyn Write + Send>>>;
+
 pub struct OutputFastqFileOp {
     required_names: Vec<LabelOrAttr>,
     file_exprs: Vec<Expr>,
     file_consts: Vec<Option<Vec<u8>>>,
-    file_writers: Mutex<FxHashMap<Vec<u8>, Arc<Mutex<dyn Write + Send>>>>,
+    file_writers: Mutex<FileWriterMap>,
 }
 
 impl OutputFastqFileOp {
@@ -77,9 +86,12 @@ impl OutputFastqFileOp {
 
     /// Output reads to separate files whose paths are specified by expressions.
     pub fn from_files<E: Into<Expr>>(file_exprs: impl IntoIterator<Item = E>) -> Self {
-        let mut file_exprs: Vec<Expr> = file_exprs.into_iter().map(|e| e.into()).collect::<Vec<_>>();
+        let mut file_exprs: Vec<Expr> =
+            file_exprs.into_iter().map(|e| e.into()).collect::<Vec<_>>();
 
-        for e in file_exprs.iter_mut() { let _ = e.optimize(); }
+        for e in file_exprs.iter_mut() {
+            let _ = e.optimize();
+        }
         let required_names = file_exprs
             .iter()
             .flat_map(|e| e.required_names().into_iter())
@@ -128,7 +140,10 @@ impl OutputFastqFileOp {
                     let gz = GzEncoder::new(File::create(file_path)?, Compression::default());
                     Arc::new(Mutex::new(BufWriter::with_capacity(1 << 20, gz)))
                 } else {
-                    Arc::new(Mutex::new(BufWriter::with_capacity(1 << 20, File::create(file_path)?)))
+                    Arc::new(Mutex::new(BufWriter::with_capacity(
+                        1 << 20,
+                        File::create(file_path)?,
+                    )))
                 };
 
                 Ok(Arc::clone(e.insert(writer)))
@@ -160,65 +175,84 @@ fn stub_output() -> bool {
 
 impl<T: Trace> GraphNode<T> for OutputFastqFileOp {
     fn run_inner(&self, reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
-        if stub_output() { return Ok((Some(reads), false)); }
-        
+        if stub_output() {
+            return Ok((Some(reads), false));
+        }
+
         OUTPUT_TLS.with(|tls| {
             let mut state_borrow = tls.borrow_mut();
             let TlsOutputState { writers, bufs } = &mut *state_borrow;
-            
+
             for read in &reads {
                 for (i, file_expr) in self.file_exprs.iter().enumerate() {
-                    let file_name: Cow<[u8]> = if let Some(c) = self.file_consts.get(i).and_then(|o| o.as_ref()) {
-                        Cow::Borrowed(&c[..])
-                    } else {
-                        file_expr
-                            .eval_bytes(read, false)
-                            .map_err(|e| Error::NameError {
-                                source: e,
-                                read: read.clone(),
-                                context: Self::NAME,
-                            })?
-                    };
+                    let file_name: Cow<[u8]> =
+                        if let Some(c) = self.file_consts.get(i).and_then(|o| o.as_ref()) {
+                            Cow::Borrowed(&c[..])
+                        } else {
+                            file_expr
+                                .eval_bytes(read, false)
+                                .map_err(|e| Error::NameError {
+                                    source: e,
+                                    read: read.clone(),
+                                    context: Self::NAME,
+                                })?
+                        };
 
-                    let record = read.to_fastq((i + 1) as _).map_err(|e| Error::NameError { source: e, read: read.clone(), context: Self::NAME })?;
-                    
+                    let record = read.to_fastq((i + 1) as _).map_err(|e| Error::NameError {
+                        source: e,
+                        read: read.clone(),
+                        context: Self::NAME,
+                    })?;
+
                     let buf = if let Some(buf) = bufs.get_mut(&*file_name) {
                         buf
                     } else {
                         bufs.entry(file_name.into_owned()).or_default()
                     };
-                    
+
                     let (name, seq, qual) = record;
                     buf.reserve(1 + name.len() + 1 + seq.len() + 3 + qual.len() + 1);
-                    buf.push(b'@'); buf.extend_from_slice(name); buf.push(b'\n');
-                    buf.extend_from_slice(seq); buf.push(b'\n');
+                    buf.push(b'@');
+                    buf.extend_from_slice(name);
+                    buf.push(b'\n');
+                    buf.extend_from_slice(seq);
+                    buf.push(b'\n');
                     buf.extend_from_slice(b"+\n");
-                    buf.extend_from_slice(qual); buf.push(b'\n');
+                    buf.extend_from_slice(qual);
+                    buf.push(b'\n');
                 }
             }
 
             // Flush buffers
             for (file_name, buf) in bufs.iter_mut() {
-                if buf.is_empty() { continue; }
-                
+                if buf.is_empty() {
+                    continue;
+                }
+
                 let writer = if let Some(w) = writers.get(file_name) {
                     Arc::clone(w)
                 } else {
-                    let w = self.get_writer(file_name).map_err(|e| Error::FileIo { file: utf8(file_name), source: Box::new(e) })?;
+                    let w = self.get_writer(file_name).map_err(|e| Error::FileIo {
+                        file: utf8(file_name),
+                        source: Box::new(e),
+                    })?;
                     writers.insert(file_name.clone(), Arc::clone(&w));
                     w
                 };
-                
+
                 let mut w = writer.lock();
-                w.write_all(buf).map_err(|e| Error::FileIo { file: utf8(file_name), source: Box::new(e) })?;
-                
+                w.write_all(buf).map_err(|e| Error::FileIo {
+                    file: utf8(file_name),
+                    source: Box::new(e),
+                })?;
+
                 buf.clear();
             }
-            
+
             Ok::<(), Error>(())
-        }).map_err(|e| e)?; // Extract result from with() which returns whatever closure returns.
-        // Wait, `with` returns R. My closure returns Result<(), Error>.
-        // So map_err is correct if I propagate it.
+        })?; // Extract result from with() which returns whatever closure returns.
+             // Wait, `with` returns R. My closure returns Result<(), Error>.
+             // So map_err is correct if I propagate it.
 
         Ok((Some(reads), false))
     }
@@ -276,10 +310,15 @@ impl<'writer> Drop for OutputFastqOp<'writer> {
 
 impl<'writer, T: Trace> GraphNode<T> for OutputFastqOp<'writer> {
     fn run_inner(&self, reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
-        if stub_output() { return Ok((Some(reads), false)); }
-        
-        let mut buffers = self.buffers.get_or(|| RefCell::new(vec![Vec::new(); self.writers.len()])).borrow_mut();
-        
+        if stub_output() {
+            return Ok((Some(reads), false));
+        }
+
+        let mut buffers = self
+            .buffers
+            .get_or(|| RefCell::new(vec![Vec::new(); self.writers.len()]))
+            .borrow_mut();
+
         for read in &reads {
             for (i, buf) in buffers.iter_mut().enumerate() {
                 let record = read.to_fastq((i + 1) as _).map_err(|e| Error::NameError {
@@ -287,25 +326,29 @@ impl<'writer, T: Trace> GraphNode<T> for OutputFastqOp<'writer> {
                     read: read.clone(),
                     context: Self::NAME,
                 })?;
-                
+
                 let (name, seq, qual) = record;
                 buf.reserve(1 + name.len() + 1 + seq.len() + 3 + qual.len() + 1);
-                buf.push(b'@'); buf.extend_from_slice(name); buf.push(b'\n');
-                buf.extend_from_slice(seq); buf.push(b'\n');
+                buf.push(b'@');
+                buf.extend_from_slice(name);
+                buf.push(b'\n');
+                buf.extend_from_slice(seq);
+                buf.push(b'\n');
                 buf.extend_from_slice(b"+\n");
-                buf.extend_from_slice(qual); buf.push(b'\n');
+                buf.extend_from_slice(qual);
+                buf.push(b'\n');
             }
         }
-        
+
         // Lock ALL writers at once to ensure R1 and R2 are written atomically
         // This prevents interleaving issues with multi-threaded output
         let mut locked_writers: Vec<_> = self.writers.iter().map(|w| w.lock()).collect();
-        
+
         for (i, buf) in buffers.iter_mut().enumerate() {
-             if !buf.is_empty() {
-                 locked_writers[i].write_all(buf).unwrap(); // TODO: proper error handling
-                 buf.clear();
-             }
+            if !buf.is_empty() {
+                locked_writers[i].write_all(buf).unwrap(); // TODO: proper error handling
+                buf.clear();
+            }
         }
         // All locks released together when locked_writers is dropped
 
@@ -360,16 +403,24 @@ pub fn write_fastq_record(
         match writer.write_vectored(&buf[..n]) {
             Ok(0) => {
                 // Fallback: write some from current segment
-                if idx >= segs.len() { break; }
+                if idx >= segs.len() {
+                    break;
+                }
                 let first = &segs[idx][off..];
                 if !first.is_empty() {
                     let nw = writer.write(first).unwrap();
-                    if nw == 0 { continue; }
+                    if nw == 0 {
+                        continue;
+                    }
                     written += nw;
                     off += nw;
-                    if off == segs[idx].len() { idx += 1; off = 0; }
+                    if off == segs[idx].len() {
+                        idx += 1;
+                        off = 0;
+                    }
                 } else {
-                    idx += 1; off = 0;
+                    idx += 1;
+                    off = 0;
                 }
             }
             Ok(nw) => {

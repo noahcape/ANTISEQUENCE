@@ -152,3 +152,76 @@ impl Pattern {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_patterns_from_strs() {
+        let p = Patterns::from_strs(vec!["ACGT", "TGCA"]);
+        assert_eq!(p.patterns().len(), 2);
+        assert!(p.pattern_name().is_none());
+        assert!(p.multimatch_name().is_none());
+        assert!(p.attr_names().is_empty());
+    }
+
+    #[test]
+    fn test_patterns_with_pattern_name() {
+        let p = Patterns::from_strs(vec!["ACGT"]).with_pattern_name("match_name");
+        assert!(p.pattern_name().is_some());
+    }
+
+    #[test]
+    fn test_patterns_with_multimatch_name() {
+        let p = Patterns::from_strs(vec!["ACGT"]).with_multimatch_name("multi");
+        assert!(p.multimatch_name().is_some());
+    }
+
+    #[test]
+    fn test_patterns_iter_literals() {
+        let p = Patterns::from_strs(vec!["ACGT", "TGCA", "AAAA"]);
+        let literals: Vec<_> = p.iter_literals().collect();
+        assert_eq!(literals.len(), 3);
+        assert_eq!(literals[0].0, 0);
+        assert_eq!(literals[0].1, b"ACGT");
+        assert_eq!(literals[1].1, b"TGCA");
+        assert_eq!(literals[2].1, b"AAAA");
+    }
+
+    #[test]
+    fn test_pattern_from_literal() {
+        let p = Pattern::from_literal(b"ACGT", vec![Data::Int(1)]);
+        assert_eq!(p.attrs().len(), 1);
+        let read = Read::new();
+        let bytes = p.get(&read).unwrap();
+        assert_eq!(bytes.as_ref(), b"ACGT");
+    }
+
+    #[test]
+    fn test_pattern_attrs() {
+        let p = Pattern::from_literal(b"ACGT", vec![Data::Bool(true), Data::Int(42)]);
+        assert_eq!(p.attrs().len(), 2);
+    }
+
+    #[test]
+    fn test_patterns_new_with_attrs() {
+        let patterns = vec![
+            Pattern::from_literal(b"ACGT", vec![Data::Int(1)]),
+            Pattern::from_literal(b"TGCA", vec![Data::Int(2)]),
+        ];
+        let p = Patterns::new(patterns, vec!["score"]);
+        assert_eq!(p.attr_names().len(), 1);
+        assert_eq!(p.patterns().len(), 2);
+    }
+
+    #[test]
+    fn test_patterns_from_exprs() {
+        let expr = Expr::from(b"ACGT".to_vec());
+        let p = Patterns::from_exprs(vec![expr]);
+        assert_eq!(p.patterns().len(), 1);
+        // Constant expression should be optimized to a literal
+        let literals: Vec<_> = p.iter_literals().collect();
+        assert_eq!(literals.len(), 1);
+    }
+}

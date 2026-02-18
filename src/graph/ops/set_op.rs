@@ -49,7 +49,7 @@ impl<T: Trace> GraphNode<T> for SetOp {
                 LabelOrAttr::Label(label) => {
                     let new_bytes = self
                         .expr
-                        .eval_bytes(&read, false)
+                        .eval_bytes(read, false)
                         .map_err(|e| Error::NameError {
                             source: e,
                             read: read.clone(),
@@ -68,7 +68,7 @@ impl<T: Trace> GraphNode<T> for SetOp {
                     if str_mappings.qual().is_some() {
                         let new_qual = self
                             .expr
-                            .eval_bytes(&read, true)
+                            .eval_bytes(read, true)
                             .map_err(|e| Error::NameError {
                                 source: e,
                                 read: read.clone(),
@@ -92,7 +92,7 @@ impl<T: Trace> GraphNode<T> for SetOp {
                     }
                 }
                 LabelOrAttr::Attr(attr) => {
-                    let new_val = self.expr.eval(&read, false).map_err(|e| Error::NameError {
+                    let new_val = self.expr.eval(read, false).map_err(|e| Error::NameError {
                         source: e,
                         read: read.clone(),
                         context: Self::NAME,
@@ -101,7 +101,8 @@ impl<T: Trace> GraphNode<T> for SetOp {
                     // panic to make borrow checker happy
                     *read
                         .data_mut(attr.str_type, attr.label, attr.attr)
-                        .unwrap_or_else(|e| panic!("Error in {}: {e}", Self::NAME)) = new_val.into();
+                        .unwrap_or_else(|e| panic!("Error in {}: {e}", Self::NAME)) =
+                        new_val.into();
                 }
             }
         }

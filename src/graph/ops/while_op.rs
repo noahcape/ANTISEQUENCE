@@ -37,11 +37,15 @@ impl<T: Trace> GraphNode<T> for WhileOp<T> {
             let mut failing_reads = Vec::with_capacity(current_batch.len());
 
             for read in current_batch {
-                if self.cond_expr.eval_bool(&read).map_err(|e| Error::NameError {
-                    source: e,
-                    read: read.clone(),
-                    context: Self::NAME,
-                })? {
+                if self
+                    .cond_expr
+                    .eval_bool(&read)
+                    .map_err(|e| Error::NameError {
+                        source: e,
+                        read: read.clone(),
+                        context: Self::NAME,
+                    })?
+                {
                     passing_reads.push(read);
                 } else {
                     failing_reads.push(read);
@@ -68,7 +72,11 @@ impl<T: Trace> GraphNode<T> for WhileOp<T> {
             }
         }
 
-        let res = if final_results.is_empty() { None } else { Some(final_results) };
+        let res = if final_results.is_empty() {
+            None
+        } else {
+            Some(final_results)
+        };
         trace.add(self.name(), start, &res);
         Ok((res, done_global))
     }

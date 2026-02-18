@@ -47,7 +47,7 @@ impl<T: Trace> GraphNode<T> for MatchRegexOp {
             .capture_names()
             .filter_map(|name| name.map(|n| InlineString::new(n.as_bytes())))
             .collect::<Vec<_>>();
-        
+
         for read in &mut reads {
             let mut new_mappings = Vec::new();
 
@@ -82,7 +82,8 @@ impl<T: Trace> GraphNode<T> for MatchRegexOp {
                 // panic to make borrow checker happy
                 *read
                     .data_mut(attr.str_type, attr.label, attr.attr)
-                    .unwrap_or_else(|e| panic!("Error in {}: {e}", Self::NAME)) = Data::Bool(matched);
+                    .unwrap_or_else(|e| panic!("Error in {}: {e}", Self::NAME)) =
+                    Data::Bool(matched);
             }
         }
 

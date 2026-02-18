@@ -2,13 +2,15 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use serde::Serialize;
-use serde_json;
 
 use std::fmt;
 use std::sync::Arc;
 
 use crate::errors::{self, Name, NameError};
 use crate::inline_string::*;
+
+/// A FASTQ record as (name, sequence, quality) byte slices.
+pub type FastqRecord<'a> = (&'a [u8], &'a [u8], &'a [u8]);
 
 pub use End::*;
 
@@ -59,14 +61,26 @@ impl StrMappings {
     pub fn new(string: Vec<u8>, origin: Arc<Origin>, idx: usize) -> Self {
         let mut mappings: SmallVec<[Mapping; 4]> = SmallVec::new();
         mappings.push(Mapping::new_default(string.len()));
-        Self { mappings, string, qual: None, origin, idx }
+        Self {
+            mappings,
+            string,
+            qual: None,
+            origin,
+            idx,
+        }
     }
 
     #[inline(always)]
     pub fn new_with_qual(string: Vec<u8>, qual: Vec<u8>, origin: Arc<Origin>, idx: usize) -> Self {
         let mut mappings: SmallVec<[Mapping; 4]> = SmallVec::new();
         mappings.push(Mapping::new_default(string.len()));
-        Self { mappings, string, qual: Some(qual), origin, idx }
+        Self {
+            mappings,
+            string,
+            qual: Some(qual),
+            origin,
+            idx,
+        }
     }
 
     #[inline(always)]
@@ -98,7 +112,9 @@ impl StrMappings {
         if let Some(m) = self.mapping_mut(label) {
             m.start = start;
             m.len = len;
-            if let Some(d) = m.data.as_mut() { d.clear(); }
+            if let Some(d) = m.data.as_mut() {
+                d.clear();
+            }
         } else {
             self.mappings.push(Mapping::new(label, start, len));
         }
@@ -111,7 +127,7 @@ impl StrMappings {
 
     #[inline(always)]
     pub fn qual(&self) -> Option<&[u8]> {
-        self.qual.as_ref().map(|q| q.as_slice())
+        self.qual.as_deref()
     }
 
     #[inline(always)]
@@ -136,7 +152,7 @@ impl StrMappings {
         let (start, len) = {
             let mapping = self
                 .mapping(label)
-                .ok_or_else(|| NameError::NotInRead(Name::Label(label)))?;
+                .ok_or(NameError::NotInRead(Name::Label(label)))?;
             (mapping.start, mapping.len)
         };
 
@@ -161,10 +177,10 @@ impl StrMappings {
     ) -> Result<(), NameError> {
         let mapping1 = self
             .mapping(label1)
-            .ok_or_else(|| NameError::NotInRead(Name::Label(label1)))?;
+            .ok_or(NameError::NotInRead(Name::Label(label1)))?;
         let mapping2 = self
             .mapping(label2)
-            .ok_or_else(|| NameError::NotInRead(Name::Label(label2)))?;
+            .ok_or(NameError::NotInRead(Name::Label(label2)))?;
 
         if let Some((start, len)) = mapping1.intersection_interval(mapping2) {
             self.add_mapping(new_label, start, len);
@@ -181,10 +197,10 @@ impl StrMappings {
     ) -> Result<(), NameError> {
         let mapping1 = self
             .mapping(label1)
-            .ok_or_else(|| NameError::NotInRead(Name::Label(label1)))?;
+            .ok_or(NameError::NotInRead(Name::Label(label1)))?;
         let mapping2 = self
             .mapping(label2)
-            .ok_or_else(|| NameError::NotInRead(Name::Label(label2)))?;
+            .ok_or(NameError::NotInRead(Name::Label(label2)))?;
 
         let (start, len) = mapping1.union_interval(mapping2);
         self.add_mapping(new_label, start, len);
@@ -200,7 +216,7 @@ impl StrMappings {
     ) -> Result<(), NameError> {
         let prev = self
             .mapping(label)
-            .ok_or_else(|| NameError::NotInRead(Name::Label(label)))?
+            .ok_or(NameError::NotInRead(Name::Label(label)))?
             .clone();
 
         self.mappings.iter_mut().for_each(|m| {
@@ -220,12 +236,10 @@ impl StrMappings {
                     if len > new_str.len() {
                         m.start = prev.start;
                         m.len -= len - new_str.len();
+                    } else if new_str.len() >= prev.len {
+                        m.start += new_str.len() - prev.len;
                     } else {
-                        if new_str.len() >= prev.len {
-                            m.start += new_str.len() - prev.len;
-                        } else {
-                            m.start -= prev.len - new_str.len();
-                        }
+                        m.start -= prev.len - new_str.len();
                     }
                 }
                 BAOverlap(len) => {
@@ -303,7 +317,8 @@ impl StrMappings {
                     std::ptr::copy(base.add(tail_src), base.add(tail_dst), tail_len);
                 }
             }
-            self.string.truncate(self.string.len() - (old_len - new_len));
+            self.string
+                .truncate(self.string.len() - (old_len - new_len));
         } else {
             // grow: make room by moving tail right, then write new bytes
             let diff = new_len - old_len;
@@ -315,11 +330,7 @@ impl StrMappings {
             if tail_len > 0 {
                 unsafe {
                     let base = self.string.as_mut_ptr();
-                    std::ptr::copy(
-                        base.add(tail_src),
-                        base.add(tail_src + diff),
-                        tail_len,
-                    );
+                    std::ptr::copy(base.add(tail_src), base.add(tail_src + diff), tail_len);
                 }
             }
             if new_len != 0 {
@@ -387,11 +398,7 @@ impl StrMappings {
                 if tail_len > 0 {
                     unsafe {
                         let base = qual_vec.as_mut_ptr();
-                        std::ptr::copy(
-                            base.add(tail_src),
-                            base.add(tail_src + diff),
-                            tail_len,
-                        );
+                        std::ptr::copy(base.add(tail_src), base.add(tail_src + diff), tail_len);
                     }
                 }
                 if q_new_len != 0 {
@@ -412,7 +419,7 @@ impl StrMappings {
     pub fn trim(&mut self, label: InlineString) -> Result<(), NameError> {
         let trimmed = self
             .mapping(label)
-            .ok_or_else(|| NameError::NotInRead(Name::Label(label)))?
+            .ok_or(NameError::NotInRead(Name::Label(label)))?
             .clone();
 
         self.mappings.iter_mut().for_each(|m| {
@@ -483,7 +490,13 @@ impl StrMappings {
         self.idx = idx;
     }
 
-    pub fn recycle_with_qual(&mut self, string: Vec<u8>, qual: Vec<u8>, origin: Arc<Origin>, idx: usize) {
+    pub fn recycle_with_qual(
+        &mut self,
+        string: Vec<u8>,
+        qual: Vec<u8>,
+        origin: Arc<Origin>,
+        idx: usize,
+    ) {
         self.mappings.clear();
         self.mappings.push(Mapping::new_default(string.len()));
         self.string = string;
@@ -618,8 +631,7 @@ impl Mapping {
 
     #[inline(always)]
     pub fn data_mut(&mut self, attr: InlineString) -> &mut Data {
-        self
-            .data
+        self.data
             .get_or_insert_with(SmallAttrMap::default)
             .get_or_insert_default(attr)
     }
@@ -632,18 +644,29 @@ struct SmallAttrMap {
 }
 
 impl Default for SmallAttrMap {
-    fn default() -> Self { Self { small: SmallVec::new(), map: None } }
+    fn default() -> Self {
+        Self {
+            small: SmallVec::new(),
+            map: None,
+        }
+    }
 }
 
 impl SmallAttrMap {
     fn clear(&mut self) {
         self.small.clear();
-        if let Some(m) = &mut self.map { m.clear(); }
+        if let Some(m) = &mut self.map {
+            m.clear();
+        }
     }
 
     fn get(&self, attr: &InlineString) -> Option<&Data> {
-        if let Some(m) = &self.map { return m.get(attr); }
-        self.small.iter().find_map(|(k, v)| if k == attr { Some(v) } else { None })
+        if let Some(m) = &self.map {
+            return m.get(attr);
+        }
+        self.small
+            .iter()
+            .find_map(|(k, v)| if k == attr { Some(v) } else { None })
     }
 
     fn get_or_insert_default(&mut self, attr: InlineString) -> &mut Data {
@@ -681,9 +704,13 @@ impl SmallAttrMap {
 
     fn for_each<F: FnMut(&InlineString, &Data)>(&self, mut f: F) {
         if let Some(m) = &self.map {
-            for (k, v) in m.iter() { f(k, v); }
+            for (k, v) in m.iter() {
+                f(k, v);
+            }
         } else {
-            for (k, v) in self.small.iter() { f(k, v); }
+            for (k, v) in self.small.iter() {
+                f(k, v);
+            }
         }
     }
 
@@ -697,10 +724,18 @@ impl SmallAttrMap {
     }
 }
 
+impl Default for Read {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Read {
     #[inline(always)]
     pub fn new() -> Self {
-        Self { str_mappings: Vec::with_capacity(4) }
+        Self {
+            str_mappings: Vec::with_capacity(4),
+        }
     }
 
     #[inline(always)]
@@ -714,7 +749,7 @@ impl Read {
             match name {
                 crate::expr::LabelOrAttr::Label(l) => {
                     if let Some(s) = self.str_mappings(l.str_type) {
-                        if let Some(_) = s.mapping(l.label) {
+                        if s.mapping(l.label).is_some() {
                             continue;
                         }
                     }
@@ -722,7 +757,7 @@ impl Read {
                 }
                 crate::expr::LabelOrAttr::Attr(a) => {
                     if let Some(s) = self.str_mappings(a.str_type) {
-                        if let Some(_) = s.data(a.label, a.attr) {
+                        if s.data(a.label, a.attr).is_some() {
                             continue;
                         }
                     }
@@ -731,7 +766,7 @@ impl Read {
             }
         }
 
-        return true;
+        true
     }
 
     pub fn add_fastq(
@@ -760,7 +795,8 @@ impl Read {
     ) {
         if let Some(n) = name {
             let name_sm = StrMappings::new(n.to_owned(), Arc::clone(&origin), idx);
-            self.str_mappings.push((StrType::Name(str_type_idx), name_sm));
+            self.str_mappings
+                .push((StrType::Name(str_type_idx), name_sm));
         }
         let seq_sm = match qual {
             Some(q) => StrMappings::new_with_qual(seq.to_owned(), q.to_owned(), origin, idx),
@@ -781,10 +817,10 @@ impl Read {
         // Try to reuse existing StrMappings if they exist
         let name_type = StrType::Name(str_type_idx);
         let seq_type = StrType::Seq(str_type_idx);
-        
+
         let mut name_found = false;
         let mut seq_found = false;
-        
+
         for (t, sm) in &mut self.str_mappings {
             if *t == name_type {
                 let mut s = std::mem::take(&mut sm.string);
@@ -796,16 +832,16 @@ impl Read {
                 let mut s = std::mem::take(&mut sm.string);
                 s.clear();
                 s.extend_from_slice(seq);
-                
+
                 let mut q = sm.qual.take().unwrap_or_default();
                 q.clear();
                 q.extend_from_slice(qual);
-                
+
                 sm.recycle_with_qual(s, q, Arc::clone(&origin), idx);
                 seq_found = true;
             }
         }
-        
+
         if !name_found {
             let name = StrMappings::new(name.to_owned(), Arc::clone(&origin), idx);
             self.str_mappings.push((name_type, name));
@@ -827,23 +863,24 @@ impl Read {
     ) {
         let name_type = StrType::Name(str_type_idx);
         let seq_type = StrType::Seq(str_type_idx);
-        
+
         let mut name_found = false;
         let mut seq_found = false;
-        
+
         for (t, sm) in &mut self.str_mappings {
-            if *t == name_type && name.is_some() {
-                let n = name.unwrap();
-                let mut s = std::mem::take(&mut sm.string);
-                s.clear();
-                s.extend_from_slice(n);
-                sm.recycle(s, Arc::clone(&origin), idx);
-                name_found = true;
+            if *t == name_type {
+                if let Some(n) = name {
+                    let mut s = std::mem::take(&mut sm.string);
+                    s.clear();
+                    s.extend_from_slice(n);
+                    sm.recycle(s, Arc::clone(&origin), idx);
+                    name_found = true;
+                }
             } else if *t == seq_type {
                 let mut s = std::mem::take(&mut sm.string);
                 s.clear();
                 s.extend_from_slice(seq);
-                
+
                 if let Some(q_bytes) = qual {
                     let mut q = sm.qual.take().unwrap_or_default();
                     q.clear();
@@ -855,7 +892,7 @@ impl Read {
                 seq_found = true;
             }
         }
-        
+
         if !name_found {
             if let Some(n) = name {
                 let name_sm = StrMappings::new(n.to_owned(), Arc::clone(&origin), idx);
@@ -878,16 +915,16 @@ impl Read {
         string: &[u8],
         qual: Option<&[u8]>,
         origin: Arc<Origin>,
-        idx: usize
+        idx: usize,
     ) {
         if slot_idx < self.str_mappings.len() {
             let (t, sm) = &mut self.str_mappings[slot_idx];
             *t = str_type;
-            
+
             let mut s = std::mem::take(&mut sm.string);
             s.clear();
             s.extend_from_slice(string);
-            
+
             if let Some(q_bytes) = qual {
                 let mut q = sm.qual.take().unwrap_or_default();
                 q.clear();
@@ -906,11 +943,14 @@ impl Read {
         }
     }
 
+    /// Returns (name, sequence, quality) for the given string type index.
     #[inline(always)]
-    pub fn to_fastq(&self, str_type_idx: u8) -> Result<(&[u8], &[u8], &[u8]), NameError> {
+    pub fn to_fastq(&self, str_type_idx: u8) -> Result<FastqRecord<'_>, NameError> {
         let name = self
             .str_mappings(StrType::Name(str_type_idx))
-            .ok_or_else(|| NameError::NotInRead(Name::StrType(StrType::Name(str_type_idx))))?;
+            .ok_or(NameError::NotInRead(Name::StrType(StrType::Name(
+                str_type_idx,
+            ))))?;
         let seq = self.str_mappings(StrType::Seq(str_type_idx)).unwrap();
         Ok((name.string(), seq.string(), seq.qual().unwrap()))
     }
@@ -936,9 +976,9 @@ impl Read {
     #[inline(always)]
     pub fn mapping(&self, str_type: StrType, label: InlineString) -> Result<&Mapping, NameError> {
         self.str_mappings(str_type)
-            .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?
+            .ok_or(NameError::NotInRead(Name::StrType(str_type)))?
             .mapping(label)
-            .ok_or_else(|| NameError::NotInRead(Name::Label(label)))
+            .ok_or(NameError::NotInRead(Name::Label(label)))
     }
 
     #[inline(always)]
@@ -948,9 +988,9 @@ impl Read {
         label: InlineString,
     ) -> Result<&mut Mapping, NameError> {
         self.str_mappings_mut(str_type)
-            .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?
+            .ok_or(NameError::NotInRead(Name::StrType(str_type)))?
             .mapping_mut(label)
-            .ok_or_else(|| NameError::NotInRead(Name::Label(label)))
+            .ok_or(NameError::NotInRead(Name::Label(label)))
     }
 
     pub fn data(
@@ -960,11 +1000,11 @@ impl Read {
         attr: InlineString,
     ) -> Result<&Data, NameError> {
         self.str_mappings(str_type)
-            .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?
+            .ok_or(NameError::NotInRead(Name::StrType(str_type)))?
             .mapping(label)
-            .ok_or_else(|| NameError::NotInRead(Name::Label(label)))?
+            .ok_or(NameError::NotInRead(Name::Label(label)))?
             .data(attr)
-            .ok_or_else(|| NameError::NotInRead(Name::Attr(attr)))
+            .ok_or(NameError::NotInRead(Name::Attr(attr)))
     }
 
     pub fn data_mut(
@@ -975,9 +1015,9 @@ impl Read {
     ) -> Result<&mut Data, NameError> {
         Ok(self
             .str_mappings_mut(str_type)
-            .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?
+            .ok_or(NameError::NotInRead(Name::StrType(str_type)))?
             .mapping_mut(label)
-            .ok_or_else(|| NameError::NotInRead(Name::Label(label)))?
+            .ok_or(NameError::NotInRead(Name::Label(label)))?
             .data_mut(attr))
     }
 
@@ -985,10 +1025,10 @@ impl Read {
     pub fn substring(&self, str_type: StrType, label: InlineString) -> Result<&[u8], NameError> {
         let str_mappings = self
             .str_mappings(str_type)
-            .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?;
+            .ok_or(NameError::NotInRead(Name::StrType(str_type)))?;
         let mapping = str_mappings
             .mapping(label)
-            .ok_or_else(|| NameError::NotInRead(Name::Label(label)))?;
+            .ok_or(NameError::NotInRead(Name::Label(label)))?;
         Ok(str_mappings.substring(mapping))
     }
 
@@ -1000,10 +1040,10 @@ impl Read {
     ) -> Result<Option<&[u8]>, NameError> {
         let str_mappings = self
             .str_mappings(str_type)
-            .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?;
+            .ok_or(NameError::NotInRead(Name::StrType(str_type)))?;
         let mapping = str_mappings
             .mapping(label)
-            .ok_or_else(|| NameError::NotInRead(Name::Label(label)))?;
+            .ok_or(NameError::NotInRead(Name::Label(label)))?;
         Ok(str_mappings.substring_qual(mapping))
     }
 
@@ -1016,7 +1056,7 @@ impl Read {
         cut_idx: isize,
     ) -> Result<(), NameError> {
         self.str_mappings_mut(str_type)
-            .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?
+            .ok_or(NameError::NotInRead(Name::StrType(str_type)))?
             .cut(label, new_label1, new_label2, cut_idx)
     }
 
@@ -1028,7 +1068,7 @@ impl Read {
         new_label: Option<InlineString>,
     ) -> Result<(), NameError> {
         self.str_mappings_mut(str_type)
-            .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?
+            .ok_or(NameError::NotInRead(Name::StrType(str_type)))?
             .intersect(label1, label2, new_label)
     }
 
@@ -1040,7 +1080,7 @@ impl Read {
         new_label: Option<InlineString>,
     ) -> Result<(), NameError> {
         self.str_mappings_mut(str_type)
-            .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?
+            .ok_or(NameError::NotInRead(Name::StrType(str_type)))?
             .union(label1, label2, new_label)
     }
 
@@ -1052,13 +1092,13 @@ impl Read {
         new_qual: Option<&[u8]>,
     ) -> Result<(), NameError> {
         self.str_mappings_mut(str_type)
-            .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?
+            .ok_or(NameError::NotInRead(Name::StrType(str_type)))?
             .set(label, new_str, new_qual)
     }
 
     pub fn trim(&mut self, str_type: StrType, label: InlineString) -> Result<(), NameError> {
         self.str_mappings_mut(str_type)
-            .ok_or_else(|| NameError::NotInRead(Name::StrType(str_type)))?
+            .ok_or(NameError::NotInRead(Name::StrType(str_type)))?
             .trim(label)
     }
 
@@ -1102,6 +1142,10 @@ impl Data {
             Float(_) => Err(NameError::Type("bytes", vec![self.clone()])),
             Bytes(x) => Ok(x.len()),
         }
+    }
+
+    pub fn is_empty(&self) -> Result<bool, NameError> {
+        self.len().map(|l| l == 0)
     }
 }
 
@@ -1170,7 +1214,7 @@ impl fmt::Display for StrMappings {
             f,
             " {: <len$} record {} in {}",
             "from:".bold(),
-            self.idx.to_string(),
+            self.idx,
             &*self.origin
         )?;
 
@@ -1321,7 +1365,9 @@ impl From<&Read> for SerializableRead {
                     .as_ref()
                     .map(|m| {
                         let mut out = FxHashMap::default();
-                        m.for_each(|attr, value| { out.insert(attr.to_string(), value.clone()); });
+                        m.for_each(|attr, value| {
+                            out.insert(attr.to_string(), value.clone());
+                        });
                         out
                     })
                     .unwrap_or_default();
@@ -1356,5 +1402,746 @@ mod size_tests {
     fn read_size_guard() {
         let sz = std::mem::size_of::<Read>();
         assert!(sz <= 128, "Read is too large: {} bytes", sz);
+    }
+}
+
+#[cfg(test)]
+mod read_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn test_origin() -> Arc<Origin> {
+        Arc::new(Origin::File("test.fastq".to_string()))
+    }
+
+    #[test]
+    fn test_str_mappings_new() {
+        let origin = test_origin();
+        let sm = StrMappings::new(b"ACGT".to_vec(), origin, 0);
+        assert_eq!(sm.string(), b"ACGT");
+        assert!(sm.qual().is_none());
+        assert!(sm.mapping(InlineString::new(b"*")).is_some());
+    }
+
+    #[test]
+    fn test_str_mappings_new_with_qual() {
+        let origin = test_origin();
+        let sm = StrMappings::new_with_qual(b"ACGT".to_vec(), b"IIII".to_vec(), origin, 0);
+        assert_eq!(sm.string(), b"ACGT");
+        assert_eq!(sm.qual(), Some(b"IIII".as_slice()));
+    }
+
+    #[test]
+    fn test_str_mappings_add_mapping() {
+        let origin = test_origin();
+        let mut sm = StrMappings::new(b"ACGTACGT".to_vec(), origin, 0);
+        sm.add_mapping(Some(InlineString::new(b"test")), 2, 4);
+        let mapping = sm.mapping(InlineString::new(b"test")).unwrap();
+        assert_eq!(mapping.start, 2);
+        assert_eq!(mapping.len, 4);
+        assert_eq!(sm.substring(mapping), b"GTAC");
+    }
+
+    #[test]
+    fn test_str_mappings_add_mapping_none() {
+        let origin = test_origin();
+        let mut sm = StrMappings::new(b"ACGT".to_vec(), origin, 0);
+        let count_before = sm.mappings.len();
+        sm.add_mapping(None, 0, 2);
+        assert_eq!(sm.mappings.len(), count_before);
+    }
+
+    #[test]
+    fn test_str_mappings_substring_qual() {
+        let origin = test_origin();
+        let mut sm =
+            StrMappings::new_with_qual(b"ACGTACGT".to_vec(), b"IIIIIIII".to_vec(), origin, 0);
+        sm.add_mapping(Some(InlineString::new(b"test")), 2, 4);
+        let mapping = sm.mapping(InlineString::new(b"test")).unwrap();
+        assert_eq!(sm.substring_qual(mapping), Some(b"IIII".as_slice()));
+    }
+
+    #[test]
+    fn test_str_mappings_cut_positive() {
+        let origin = test_origin();
+        let mut sm = StrMappings::new(b"ACGTACGT".to_vec(), origin, 0);
+        sm.cut(
+            InlineString::new(b"*"),
+            Some(InlineString::new(b"left")),
+            Some(InlineString::new(b"right")),
+            3,
+        )
+        .unwrap();
+        let left = sm.mapping(InlineString::new(b"left")).unwrap();
+        let right = sm.mapping(InlineString::new(b"right")).unwrap();
+        assert_eq!(sm.substring(left), b"ACG");
+        assert_eq!(sm.substring(right), b"TACGT");
+    }
+
+    #[test]
+    fn test_str_mappings_cut_negative() {
+        let origin = test_origin();
+        let mut sm = StrMappings::new(b"ACGTACGT".to_vec(), origin, 0);
+        sm.cut(
+            InlineString::new(b"*"),
+            Some(InlineString::new(b"left")),
+            Some(InlineString::new(b"right")),
+            -3,
+        )
+        .unwrap();
+        let left = sm.mapping(InlineString::new(b"left")).unwrap();
+        let right = sm.mapping(InlineString::new(b"right")).unwrap();
+        assert_eq!(sm.substring(left), b"ACGTA");
+        assert_eq!(sm.substring(right), b"CGT");
+    }
+
+    #[test]
+    fn test_str_mappings_cut_missing_label() {
+        let origin = test_origin();
+        let mut sm = StrMappings::new(b"ACGT".to_vec(), origin, 0);
+        let result = sm.cut(
+            InlineString::new(b"nonexistent"),
+            Some(InlineString::new(b"left")),
+            Some(InlineString::new(b"right")),
+            2,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_str_mappings_intersect() {
+        let origin = test_origin();
+        let mut sm = StrMappings::new(b"ACGTACGT".to_vec(), origin, 0);
+        sm.add_mapping(Some(InlineString::new(b"a")), 0, 5);
+        sm.add_mapping(Some(InlineString::new(b"b")), 3, 5);
+        sm.intersect(
+            InlineString::new(b"a"),
+            InlineString::new(b"b"),
+            Some(InlineString::new(b"inter")),
+        )
+        .unwrap();
+        let inter = sm.mapping(InlineString::new(b"inter")).unwrap();
+        assert_eq!(inter.start, 3);
+        assert_eq!(inter.len, 2);
+    }
+
+    #[test]
+    fn test_str_mappings_union() {
+        let origin = test_origin();
+        let mut sm = StrMappings::new(b"ACGTACGT".to_vec(), origin, 0);
+        sm.add_mapping(Some(InlineString::new(b"a")), 0, 3);
+        sm.add_mapping(Some(InlineString::new(b"b")), 5, 3);
+        sm.union(
+            InlineString::new(b"a"),
+            InlineString::new(b"b"),
+            Some(InlineString::new(b"uni")),
+        )
+        .unwrap();
+        let uni = sm.mapping(InlineString::new(b"uni")).unwrap();
+        assert_eq!(uni.start, 0);
+        assert_eq!(uni.len, 8);
+    }
+
+    #[test]
+    fn test_mapping_new() {
+        let m = Mapping::new(InlineString::new(b"test"), 5, 10);
+        assert_eq!(m.start, 5);
+        assert_eq!(m.len, 10);
+    }
+
+    #[test]
+    fn test_mapping_new_default() {
+        let m = Mapping::new_default(20);
+        assert_eq!(m.start, 0);
+        assert_eq!(m.len, 20);
+    }
+
+    #[test]
+    fn test_mapping_intersection_interval() {
+        let m1 = Mapping::new(InlineString::new(b"a"), 0, 5);
+        let m2 = Mapping::new(InlineString::new(b"b"), 3, 5);
+        let (start, len) = m1.intersection_interval(&m2).unwrap();
+        assert_eq!(start, 3);
+        assert_eq!(len, 2);
+    }
+
+    #[test]
+    fn test_mapping_intersection_interval_no_overlap() {
+        let m1 = Mapping::new(InlineString::new(b"a"), 0, 3);
+        let m2 = Mapping::new(InlineString::new(b"b"), 5, 3);
+        assert!(m1.intersection_interval(&m2).is_none());
+    }
+
+    #[test]
+    fn test_mapping_union_interval() {
+        let m1 = Mapping::new(InlineString::new(b"a"), 0, 3);
+        let m2 = Mapping::new(InlineString::new(b"b"), 5, 3);
+        let (start, len) = m1.union_interval(&m2);
+        assert_eq!(start, 0);
+        assert_eq!(len, 8);
+    }
+
+    #[test]
+    fn test_read_new() {
+        let read = Read::new();
+        assert!(read.str_mappings.is_empty());
+    }
+
+    #[test]
+    fn test_read_add_fastq() {
+        let origin = test_origin();
+        let mut read = Read::new();
+        read.add_fastq(1, b"read1", b"ACGT", b"IIII", origin, 0);
+        assert!(read.str_mappings(StrType::Seq(1)).is_some());
+        assert!(read.str_mappings(StrType::Name(1)).is_some());
+    }
+
+    #[test]
+    fn test_str_type_display() {
+        assert_eq!(format!("{}", StrType::Seq(1)), "seq1");
+        assert_eq!(format!("{}", StrType::Seq(2)), "seq2");
+        assert_eq!(format!("{}", StrType::Name(1)), "name1");
+    }
+
+    #[test]
+    fn test_str_type_new() {
+        assert!(StrType::new(b"seq1").is_ok());
+        assert!(StrType::new(b"seq2").is_ok());
+        assert!(StrType::new(b"name1").is_ok());
+        assert!(StrType::new(b"invalid").is_err());
+    }
+
+    #[test]
+    fn test_end_enum() {
+        assert_eq!(Left, End::Left);
+        assert_eq!(Right, End::Right);
+    }
+
+    #[test]
+    fn test_end_to_isize() {
+        assert_eq!(Left.to_isize(5), 5);
+        assert_eq!(Right.to_isize(5), -5);
+    }
+
+    #[test]
+    fn test_origin_display() {
+        let origin = Origin::File("test.fastq".to_string());
+        assert!(format!("{}", origin).contains("test.fastq"));
+        let origin_bytes = Origin::Bytes;
+        assert_eq!(format!("{}", origin_bytes), "bytes");
+    }
+
+    #[test]
+    fn test_intersection_ab_overlap() {
+        let m1 = Mapping::new(InlineString::new(b"a"), 0, 5);
+        let m2 = Mapping::new(InlineString::new(b"b"), 3, 5);
+        let inter = m1.intersect(&m2);
+        assert!(matches!(inter, Intersection::ABOverlap(_)));
+    }
+
+    #[test]
+    fn test_intersection_ba_overlap() {
+        let m1 = Mapping::new(InlineString::new(b"a"), 3, 5);
+        let m2 = Mapping::new(InlineString::new(b"b"), 0, 5);
+        let inter = m1.intersect(&m2);
+        assert!(matches!(inter, Intersection::BAOverlap(_)));
+    }
+
+    #[test]
+    fn test_intersection_a_before_b() {
+        let m1 = Mapping::new(InlineString::new(b"a"), 0, 3);
+        let m2 = Mapping::new(InlineString::new(b"b"), 5, 3);
+        let inter = m1.intersect(&m2);
+        assert!(matches!(inter, Intersection::ABeforeB));
+    }
+
+    #[test]
+    fn test_intersection_b_before_a() {
+        let m1 = Mapping::new(InlineString::new(b"a"), 5, 3);
+        let m2 = Mapping::new(InlineString::new(b"b"), 0, 3);
+        let inter = m1.intersect(&m2);
+        assert!(matches!(inter, Intersection::BBeforeA));
+    }
+
+    #[test]
+    fn test_intersection_a_inside_b() {
+        let m1 = Mapping::new(InlineString::new(b"a"), 2, 3);
+        let m2 = Mapping::new(InlineString::new(b"b"), 0, 10);
+        let inter = m1.intersect(&m2);
+        assert!(matches!(inter, Intersection::AInsideB));
+    }
+
+    #[test]
+    fn test_intersection_b_inside_a() {
+        let m1 = Mapping::new(InlineString::new(b"a"), 0, 10);
+        let m2 = Mapping::new(InlineString::new(b"b"), 2, 3);
+        let inter = m1.intersect(&m2);
+        assert!(matches!(inter, Intersection::BInsideA));
+    }
+
+    #[test]
+    fn test_intersection_equal() {
+        let m1 = Mapping::new(InlineString::new(b"a"), 0, 5);
+        let m2 = Mapping::new(InlineString::new(b"b"), 0, 5);
+        let inter = m1.intersect(&m2);
+        assert!(matches!(inter, Intersection::Equal));
+    }
+
+    // -- Mapping data methods --
+
+    #[test]
+    fn test_mapping_data_none() {
+        let m = Mapping::new(InlineString::new(b"test"), 0, 5);
+        assert!(m.data(InlineString::new(b"attr")).is_none());
+    }
+
+    #[test]
+    fn test_mapping_data_mut() {
+        let mut m = Mapping::new(InlineString::new(b"test"), 0, 5);
+        *m.data_mut(InlineString::new(b"score")) = Data::Int(42);
+        assert_eq!(m.data(InlineString::new(b"score")), Some(&Data::Int(42)));
+    }
+
+    #[test]
+    fn test_mapping_data_mut_multiple() {
+        let mut m = Mapping::new(InlineString::new(b"test"), 0, 5);
+        *m.data_mut(InlineString::new(b"a")) = Data::Int(1);
+        *m.data_mut(InlineString::new(b"b")) = Data::Int(2);
+        *m.data_mut(InlineString::new(b"c")) = Data::Int(3);
+        *m.data_mut(InlineString::new(b"d")) = Data::Int(4);
+        // This should trigger promotion to hashmap (inline_size = 4)
+        *m.data_mut(InlineString::new(b"e")) = Data::Int(5);
+        assert_eq!(m.data(InlineString::new(b"a")), Some(&Data::Int(1)));
+        assert_eq!(m.data(InlineString::new(b"e")), Some(&Data::Int(5)));
+    }
+
+    // -- Data methods --
+
+    #[test]
+    fn test_data_as_bool() {
+        assert!(Data::Bool(true).as_bool());
+        assert!(!(Data::Bool(false).as_bool()));
+        assert!(Data::Int(1).as_bool());
+        assert!(!(Data::Int(0).as_bool()));
+        assert!(Data::Float(1.0).as_bool());
+        assert!(!(Data::Float(0.0).as_bool()));
+        assert!(Data::Bytes(b"test".to_vec()).as_bool());
+        assert!(!(Data::Bytes(vec![]).as_bool()));
+    }
+
+    #[test]
+    fn test_data_as_int() {
+        assert_eq!(Data::Bool(true).as_int().unwrap(), 1);
+        assert_eq!(Data::Bool(false).as_int().unwrap(), 0);
+        assert_eq!(Data::Int(42).as_int().unwrap(), 42);
+        assert_eq!(Data::Float(3.7).as_int().unwrap(), 3);
+        assert!(Data::Bytes(vec![]).as_int().is_err());
+    }
+
+    #[test]
+    fn test_data_len() {
+        assert_eq!(Data::Bytes(b"test".to_vec()).len().unwrap(), 4);
+        assert!(Data::Bool(true).len().is_err());
+        assert!(Data::Int(42).len().is_err());
+        assert!(Data::Float(2.71).len().is_err());
+    }
+
+    // -- Read methods --
+
+    #[test]
+    fn test_read_clear() {
+        let origin = test_origin();
+        let mut read = Read::new();
+        read.add_fastq(1, b"read1", b"ACGT", b"IIII", origin, 0);
+        assert!(!read.str_mappings.is_empty());
+        read.clear();
+        assert!(read.str_mappings.is_empty());
+    }
+
+    #[test]
+    fn test_read_add_fastq_parts_with_qual() {
+        let origin = test_origin();
+        let mut read = Read::new();
+        read.add_fastq_parts(1, Some(b"read1"), b"ACGT", Some(b"IIII"), origin, 0);
+        assert!(read.str_mappings(StrType::Name(1)).is_some());
+        let seq = read.str_mappings(StrType::Seq(1)).unwrap();
+        assert_eq!(seq.string(), b"ACGT");
+        assert_eq!(seq.qual(), Some(b"IIII".as_slice()));
+    }
+
+    #[test]
+    fn test_read_add_fastq_parts_no_name() {
+        let origin = test_origin();
+        let mut read = Read::new();
+        read.add_fastq_parts(1, None, b"ACGT", None, origin, 0);
+        assert!(read.str_mappings(StrType::Name(1)).is_none());
+        assert!(read.str_mappings(StrType::Seq(1)).is_some());
+    }
+
+    #[test]
+    fn test_read_cut() {
+        let origin = test_origin();
+        let mut read = Read::new();
+        read.add_fastq(1, b"read1", b"ACGTACGT", b"IIIIIIII", origin, 0);
+        read.cut(
+            StrType::Seq(1),
+            InlineString::new(b"*"),
+            Some(InlineString::new(b"left")),
+            Some(InlineString::new(b"right")),
+            4,
+        )
+        .unwrap();
+        assert_eq!(
+            read.substring(StrType::Seq(1), InlineString::new(b"left"))
+                .unwrap(),
+            b"ACGT"
+        );
+        assert_eq!(
+            read.substring(StrType::Seq(1), InlineString::new(b"right"))
+                .unwrap(),
+            b"ACGT"
+        );
+    }
+
+    #[test]
+    fn test_read_set() {
+        let origin = test_origin();
+        let mut read = Read::new();
+        read.add_fastq(1, b"read1", b"ACGTACGT", b"IIIIIIII", origin, 0);
+        read.cut(
+            StrType::Seq(1),
+            InlineString::new(b"*"),
+            Some(InlineString::new(b"left")),
+            Some(InlineString::new(b"right")),
+            4,
+        )
+        .unwrap();
+        read.set(
+            StrType::Seq(1),
+            InlineString::new(b"left"),
+            b"NN",
+            Some(b"!!"),
+        )
+        .unwrap();
+        assert_eq!(
+            read.substring(StrType::Seq(1), InlineString::new(b"left"))
+                .unwrap(),
+            b"NN"
+        );
+    }
+
+    #[test]
+    fn test_read_trim() {
+        let origin = test_origin();
+        let mut read = Read::new();
+        read.add_fastq(1, b"read1", b"ACGTACGT", b"IIIIIIII", origin, 0);
+        read.cut(
+            StrType::Seq(1),
+            InlineString::new(b"*"),
+            Some(InlineString::new(b"left")),
+            Some(InlineString::new(b"right")),
+            4,
+        )
+        .unwrap();
+        read.trim(StrType::Seq(1), InlineString::new(b"left"))
+            .unwrap();
+        let seq = read.str_mappings(StrType::Seq(1)).unwrap();
+        assert_eq!(seq.string(), b"ACGT");
+    }
+
+    #[test]
+    fn test_read_remove_internal() {
+        let origin = test_origin();
+        let mut read = Read::new();
+        read.add_fastq(1, b"read1", b"ACGTACGT", b"IIIIIIII", origin, 0);
+        let sm = read.str_mappings_mut(StrType::Seq(1)).unwrap();
+        sm.add_mapping(Some(InlineString::new(b"_internal")), 0, 4);
+        sm.add_mapping(Some(InlineString::new(b"public")), 4, 4);
+        read.remove_internal();
+        let sm = read.str_mappings(StrType::Seq(1)).unwrap();
+        assert!(sm.mapping(InlineString::new(b"_internal")).is_none());
+        assert!(sm.mapping(InlineString::new(b"public")).is_some());
+    }
+
+    #[test]
+    fn test_read_has_names() {
+        let origin = test_origin();
+        let mut read = Read::new();
+        read.add_fastq(1, b"read1", b"ACGT", b"IIII", origin, 0);
+        let label = crate::expr::Label::new(b"seq1.*").unwrap();
+        assert!(read.has_names(&[crate::expr::LabelOrAttr::Label(label)]));
+    }
+
+    #[test]
+    fn test_read_has_names_missing() {
+        let read = Read::new();
+        let label = crate::expr::Label::new(b"seq1.*").unwrap();
+        assert!(!read.has_names(&[crate::expr::LabelOrAttr::Label(label)]));
+    }
+
+    #[test]
+    fn test_read_data_mut() {
+        let origin = test_origin();
+        let mut read = Read::new();
+        read.add_fastq(1, b"read1", b"ACGT", b"IIII", origin, 0);
+        *read
+            .data_mut(
+                StrType::Seq(1),
+                InlineString::new(b"*"),
+                InlineString::new(b"score"),
+            )
+            .unwrap() = Data::Int(100);
+        let val = read
+            .data(
+                StrType::Seq(1),
+                InlineString::new(b"*"),
+                InlineString::new(b"score"),
+            )
+            .unwrap();
+        assert_eq!(val, &Data::Int(100));
+    }
+
+    #[test]
+    fn test_read_to_fastq() {
+        let origin = test_origin();
+        let mut read = Read::new();
+        read.add_fastq(1, b"read1", b"ACGT", b"IIII", origin, 0);
+        let (name, seq, qual) = read.to_fastq(1).unwrap();
+        assert_eq!(name, b"read1");
+        assert_eq!(seq, b"ACGT");
+        assert_eq!(qual, b"IIII");
+    }
+
+    #[test]
+    fn test_read_to_json() {
+        let origin = test_origin();
+        let mut read = Read::new();
+        read.add_fastq(1, b"read1", b"ACGT", b"IIII", origin, 0);
+        let json = read.to_json();
+        assert!(json.contains("ACGT"));
+    }
+
+    #[test]
+    fn test_read_mapping() {
+        let origin = test_origin();
+        let mut read = Read::new();
+        read.add_fastq(1, b"read1", b"ACGT", b"IIII", origin, 0);
+        let m = read
+            .mapping(StrType::Seq(1), InlineString::new(b"*"))
+            .unwrap();
+        assert_eq!(m.start, 0);
+        assert_eq!(m.len, 4);
+    }
+
+    #[test]
+    fn test_read_mapping_missing_str_type() {
+        let read = Read::new();
+        let result = read.mapping(StrType::Seq(1), InlineString::new(b"*"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_substring() {
+        let origin = test_origin();
+        let mut read = Read::new();
+        read.add_fastq(1, b"read1", b"ACGT", b"IIII", origin, 0);
+        assert_eq!(
+            read.substring(StrType::Seq(1), InlineString::new(b"*"))
+                .unwrap(),
+            b"ACGT"
+        );
+    }
+
+    #[test]
+    fn test_read_substring_qual() {
+        let origin = test_origin();
+        let mut read = Read::new();
+        read.add_fastq(1, b"read1", b"ACGT", b"IIII", origin, 0);
+        assert_eq!(
+            read.substring_qual(StrType::Seq(1), InlineString::new(b"*"))
+                .unwrap(),
+            Some(b"IIII".as_slice())
+        );
+    }
+
+    #[test]
+    fn test_read_intersect() {
+        let origin = test_origin();
+        let mut read = Read::new();
+        read.add_fastq(1, b"read1", b"ACGTACGT", b"IIIIIIII", origin, 0);
+        let sm = read.str_mappings_mut(StrType::Seq(1)).unwrap();
+        sm.add_mapping(Some(InlineString::new(b"a")), 0, 5);
+        sm.add_mapping(Some(InlineString::new(b"b")), 3, 5);
+        read.intersect(
+            StrType::Seq(1),
+            InlineString::new(b"a"),
+            InlineString::new(b"b"),
+            Some(InlineString::new(b"inter")),
+        )
+        .unwrap();
+        assert_eq!(
+            read.substring(StrType::Seq(1), InlineString::new(b"inter"))
+                .unwrap(),
+            b"TA"
+        );
+    }
+
+    #[test]
+    fn test_read_union() {
+        let origin = test_origin();
+        let mut read = Read::new();
+        read.add_fastq(1, b"read1", b"ACGTACGT", b"IIIIIIII", origin, 0);
+        let sm = read.str_mappings_mut(StrType::Seq(1)).unwrap();
+        sm.add_mapping(Some(InlineString::new(b"a")), 0, 3);
+        sm.add_mapping(Some(InlineString::new(b"b")), 5, 3);
+        read.union(
+            StrType::Seq(1),
+            InlineString::new(b"a"),
+            InlineString::new(b"b"),
+            Some(InlineString::new(b"uni")),
+        )
+        .unwrap();
+        assert_eq!(
+            read.substring(StrType::Seq(1), InlineString::new(b"uni"))
+                .unwrap(),
+            b"ACGTACGT"
+        );
+    }
+
+    #[test]
+    fn test_read_first_idx() {
+        let origin = test_origin();
+        let mut read = Read::new();
+        read.add_fastq(1, b"read1", b"ACGT", b"IIII", origin, 5);
+        assert_eq!(read.first_idx(), 5);
+    }
+
+    #[test]
+    fn test_read_add_fastq_recycled() {
+        let origin = test_origin();
+        let mut read = Read::new();
+        read.add_fastq(1, b"read1", b"ACGT", b"IIII", Arc::clone(&origin), 0);
+        read.add_fastq_recycled(1, b"read2", b"TGCA", b"!!!!", origin, 1);
+        let (name, seq, qual) = read.to_fastq(1).unwrap();
+        assert_eq!(name, b"read2");
+        assert_eq!(seq, b"TGCA");
+        assert_eq!(qual, b"!!!!");
+    }
+
+    // -- StrMappings set with size changes --
+
+    #[test]
+    fn test_str_mappings_set_same_length() {
+        let origin = test_origin();
+        let mut sm = StrMappings::new(b"ACGTACGT".to_vec(), origin, 0);
+        sm.cut(
+            InlineString::new(b"*"),
+            Some(InlineString::new(b"left")),
+            Some(InlineString::new(b"right")),
+            4,
+        )
+        .unwrap();
+        sm.set(InlineString::new(b"left"), b"NNNN", None).unwrap();
+        assert_eq!(sm.string(), b"NNNNACGT");
+    }
+
+    #[test]
+    fn test_str_mappings_set_shorter() {
+        let origin = test_origin();
+        let mut sm = StrMappings::new(b"ACGTACGT".to_vec(), origin, 0);
+        sm.cut(
+            InlineString::new(b"*"),
+            Some(InlineString::new(b"left")),
+            Some(InlineString::new(b"right")),
+            4,
+        )
+        .unwrap();
+        sm.set(InlineString::new(b"left"), b"NN", None).unwrap();
+        assert_eq!(sm.string(), b"NNACGT");
+    }
+
+    #[test]
+    fn test_str_mappings_set_longer() {
+        let origin = test_origin();
+        let mut sm = StrMappings::new(b"ACGTACGT".to_vec(), origin, 0);
+        sm.cut(
+            InlineString::new(b"*"),
+            Some(InlineString::new(b"left")),
+            Some(InlineString::new(b"right")),
+            4,
+        )
+        .unwrap();
+        sm.set(InlineString::new(b"left"), b"NNNNNN", None).unwrap();
+        assert_eq!(sm.string(), b"NNNNNNACGT");
+    }
+
+    // -- StrMappings display --
+
+    #[test]
+    fn test_str_mappings_display() {
+        let origin = test_origin();
+        let sm = StrMappings::new(b"ACGT".to_vec(), origin, 0);
+        let display = format!("{}", sm);
+        assert!(display.contains("ACGT"));
+    }
+
+    // -- Intersection edge cases with same start/end --
+
+    #[test]
+    fn test_intersection_same_start_a_longer() {
+        let m1 = Mapping::new(InlineString::new(b"a"), 0, 8);
+        let m2 = Mapping::new(InlineString::new(b"b"), 0, 4);
+        let inter = m1.intersect(&m2);
+        assert!(matches!(inter, Intersection::BAOverlap(_)));
+    }
+
+    #[test]
+    fn test_intersection_same_start_b_longer() {
+        let m1 = Mapping::new(InlineString::new(b"a"), 0, 4);
+        let m2 = Mapping::new(InlineString::new(b"b"), 0, 8);
+        let inter = m1.intersect(&m2);
+        assert!(matches!(inter, Intersection::ABOverlap(_)));
+    }
+
+    #[test]
+    fn test_intersection_same_end_a_starts_first() {
+        // a=[0,8), b=[4,8) -> same end, a_start < b_start -> ABOverlap
+        let m1 = Mapping::new(InlineString::new(b"a"), 0, 8);
+        let m2 = Mapping::new(InlineString::new(b"b"), 4, 4);
+        let inter = m1.intersect(&m2);
+        assert!(matches!(inter, Intersection::ABOverlap(_)));
+    }
+
+    #[test]
+    fn test_intersection_same_end_b_starts_first() {
+        // a=[4,8), b=[0,8) -> same end, a_start > b_start -> BAOverlap
+        let m1 = Mapping::new(InlineString::new(b"a"), 4, 4);
+        let m2 = Mapping::new(InlineString::new(b"b"), 0, 8);
+        let inter = m1.intersect(&m2);
+        assert!(matches!(inter, Intersection::BAOverlap(_)));
+    }
+
+    // -- StrMappings recycle --
+
+    #[test]
+    fn test_str_mappings_recycle() {
+        let origin = test_origin();
+        let mut sm = StrMappings::new(b"ACGT".to_vec(), origin, 0);
+        sm.add_mapping(Some(InlineString::new(b"test")), 0, 4);
+        let origin2 = test_origin();
+        sm.recycle(b"TGCA".to_vec(), origin2, 1);
+        assert_eq!(sm.string(), b"TGCA");
+        assert_eq!(sm.idx, 1);
+        assert_eq!(sm.mappings.len(), 1);
+    }
+
+    #[test]
+    fn test_str_mappings_recycle_with_qual() {
+        let origin = test_origin();
+        let mut sm = StrMappings::new_with_qual(b"ACGT".to_vec(), b"IIII".to_vec(), origin, 0);
+        let origin2 = test_origin();
+        sm.recycle_with_qual(b"TGCA".to_vec(), b"!!!!".to_vec(), origin2, 1);
+        assert_eq!(sm.string(), b"TGCA");
+        assert_eq!(sm.qual(), Some(b"!!!!".as_slice()));
     }
 }

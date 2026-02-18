@@ -1,8 +1,8 @@
 use needletail::*;
 
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 use crate::errors::*;
 use crate::expr::LabelOrAttr;
@@ -20,8 +20,10 @@ fn chunk_size() -> usize {
     })
 }
 
+type ReaderWithOrigin<'reader> = (Mutex<Box<dyn FastxReader + 'reader>>, Arc<Origin>);
+
 pub struct InputFastqOp<'reader> {
-    readers: Vec<(Mutex<Box<dyn FastxReader + 'reader>>, Arc<Origin>)>,
+    readers: Vec<ReaderWithOrigin<'reader>>,
     idx: AtomicUsize,
     interleaved: usize,
     read_counts: Vec<AtomicUsize>,
@@ -46,7 +48,9 @@ impl<'reader> InputFastqOp<'reader> {
             idx: AtomicUsize::new(0),
             interleaved: 1,
             read_counts: (0..n_fastqs).map(|_| AtomicUsize::new(0)).collect(),
-            read_length_min: (0..n_fastqs).map(|_| AtomicUsize::new(usize::MAX)).collect(),
+            read_length_min: (0..n_fastqs)
+                .map(|_| AtomicUsize::new(usize::MAX))
+                .collect(),
             read_length_max: (0..n_fastqs).map(|_| AtomicUsize::new(0)).collect(),
             read_length_sum: (0..n_fastqs).map(|_| AtomicUsize::new(0)).collect(),
         })
@@ -72,7 +76,9 @@ impl<'reader> InputFastqOp<'reader> {
             idx: AtomicUsize::new(0),
             interleaved: 1,
             read_counts: (0..n_fastqs).map(|_| AtomicUsize::new(0)).collect(),
-            read_length_min: (0..n_fastqs).map(|_| AtomicUsize::new(usize::MAX)).collect(),
+            read_length_min: (0..n_fastqs)
+                .map(|_| AtomicUsize::new(usize::MAX))
+                .collect(),
             read_length_max: (0..n_fastqs).map(|_| AtomicUsize::new(0)).collect(),
             read_length_sum: (0..n_fastqs).map(|_| AtomicUsize::new(0)).collect(),
         })
@@ -91,7 +97,9 @@ impl<'reader> InputFastqOp<'reader> {
             idx: AtomicUsize::new(0),
             interleaved,
             read_counts: (0..n_fastqs).map(|_| AtomicUsize::new(0)).collect(),
-            read_length_min: (0..n_fastqs).map(|_| AtomicUsize::new(usize::MAX)).collect(),
+            read_length_min: (0..n_fastqs)
+                .map(|_| AtomicUsize::new(usize::MAX))
+                .collect(),
             read_length_max: (0..n_fastqs).map(|_| AtomicUsize::new(0)).collect(),
             read_length_sum: (0..n_fastqs).map(|_| AtomicUsize::new(0)).collect(),
         })
@@ -108,7 +116,9 @@ impl<'reader> InputFastqOp<'reader> {
             idx: AtomicUsize::new(0),
             interleaved: 1,
             read_counts: (0..n_fastqs).map(|_| AtomicUsize::new(0)).collect(),
-            read_length_min: (0..n_fastqs).map(|_| AtomicUsize::new(usize::MAX)).collect(),
+            read_length_min: (0..n_fastqs)
+                .map(|_| AtomicUsize::new(usize::MAX))
+                .collect(),
             read_length_max: (0..n_fastqs).map(|_| AtomicUsize::new(0)).collect(),
             read_length_sum: (0..n_fastqs).map(|_| AtomicUsize::new(0)).collect(),
         })
@@ -135,7 +145,9 @@ impl<'reader> InputFastqOp<'reader> {
             idx: AtomicUsize::new(0),
             interleaved: 1,
             read_counts: (0..n_fastqs).map(|_| AtomicUsize::new(0)).collect(),
-            read_length_min: (0..n_fastqs).map(|_| AtomicUsize::new(usize::MAX)).collect(),
+            read_length_min: (0..n_fastqs)
+                .map(|_| AtomicUsize::new(usize::MAX))
+                .collect(),
             read_length_max: (0..n_fastqs).map(|_| AtomicUsize::new(0)).collect(),
             read_length_sum: (0..n_fastqs).map(|_| AtomicUsize::new(0)).collect(),
         })
@@ -155,7 +167,9 @@ impl<'reader> InputFastqOp<'reader> {
             idx: AtomicUsize::new(0),
             interleaved,
             read_counts: (0..n_fastqs).map(|_| AtomicUsize::new(0)).collect(),
-            read_length_min: (0..n_fastqs).map(|_| AtomicUsize::new(usize::MAX)).collect(),
+            read_length_min: (0..n_fastqs)
+                .map(|_| AtomicUsize::new(usize::MAX))
+                .collect(),
             read_length_max: (0..n_fastqs).map(|_| AtomicUsize::new(0)).collect(),
             read_length_sum: (0..n_fastqs).map(|_| AtomicUsize::new(0)).collect(),
         })
@@ -179,7 +193,7 @@ impl<'reader, T: Trace> GraphNode<T> for InputFastqOp<'reader> {
         let mut i = 0;
         'outer: for _ in 0..cs {
             let idx = self.idx.fetch_add(self.interleaved, Ordering::Relaxed);
-            
+
             if self.interleaved > 1 {
                 // interleaved records all come from one file
                 let (locked_reader, origin) = &mut locked_readers[0];
@@ -204,10 +218,10 @@ impl<'reader, T: Trace> GraphNode<T> for InputFastqOp<'reader> {
                         idx: idx + j,
                         source: Box::new(e),
                     })?;
-                    
+
                     let seq = record.seq();
                     self.update_length_stats(j, seq.len());
-                    
+
                     curr_read.set_fastq_entry(
                         slot_idx,
                         StrType::Name((j + 1) as _),
@@ -217,7 +231,7 @@ impl<'reader, T: Trace> GraphNode<T> for InputFastqOp<'reader> {
                         idx + j,
                     );
                     slot_idx += 1;
-                    
+
                     curr_read.set_fastq_entry(
                         slot_idx,
                         StrType::Seq((j + 1) as _),
@@ -252,7 +266,7 @@ impl<'reader, T: Trace> GraphNode<T> for InputFastqOp<'reader> {
                     })?;
                     let seq = record.seq();
                     self.update_length_stats(j, seq.len());
-                    
+
                     curr_read.set_fastq_entry(
                         slot_idx,
                         StrType::Name((j + 1) as _),
@@ -262,7 +276,7 @@ impl<'reader, T: Trace> GraphNode<T> for InputFastqOp<'reader> {
                         idx,
                     );
                     slot_idx += 1;
-                    
+
                     curr_read.set_fastq_entry(
                         slot_idx,
                         StrType::Seq((j + 1) as _),
@@ -276,7 +290,7 @@ impl<'reader, T: Trace> GraphNode<T> for InputFastqOp<'reader> {
             }
             i += 1;
         }
-        
+
         if b.len() > i {
             b.truncate(i);
         }

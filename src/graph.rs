@@ -2,8 +2,8 @@ use std::marker::{Send, Sync};
 use std::ops::RangeBounds;
 use std::path::Path;
 use std::sync::Arc;
-use std::thread;
 use std::sync::OnceLock;
+use std::thread;
 
 use crate::errors::*;
 use crate::expr::*;
@@ -63,6 +63,12 @@ pub trait GraphNode<T: Trace = NoTrace>: Send + Sync {
     #[inline]
     fn input_stats(&self) -> Option<InputStats> {
         None
+    }
+}
+
+impl<T: Trace> Default for Graph<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -129,7 +135,7 @@ impl<T: Trace> Graph<T> {
         thread::scope(|s| {
             for _ in 0..threads {
                 s.spawn(move || {
-                    self.run_trace_inner(&trace)
+                    self.run_trace_inner(trace)
                         .unwrap_or_else(|e| panic!("{e}"));
                 });
             }
@@ -169,15 +175,23 @@ impl<T: Trace> Graph<T> {
     /// If the required label or attribute names for an operation are not available,
     /// the the operation is skipped.
     #[inline(always)]
-    pub fn run_one(&self, mut curr: Option<Vec<Read>>, trace: &T) -> Result<(Option<Vec<Read>>, bool)> {
+    pub fn run_one(
+        &self,
+        mut curr: Option<Vec<Read>>,
+        trace: &T,
+    ) -> Result<(Option<Vec<Read>>, bool)> {
         let trust = trust_required_checks();
         for node in &self.nodes {
             // If there is no current read, only the input node can produce one.
             if curr.is_none() {
                 let (c, done) = node.run(None, trace)?;
                 curr = c;
-                if done { return Ok((curr, done)); }
-                if curr.is_none() { break; }
+                if done {
+                    return Ok((curr, done));
+                }
+                if curr.is_none() {
+                    break;
+                }
                 continue;
             }
 
@@ -197,8 +211,12 @@ impl<T: Trace> Graph<T> {
             let (c, done) = node.run(curr, trace)?;
             curr = c;
 
-            if done { return Ok((curr, done)); }
-            if curr.is_none() { break; }
+            if done {
+                return Ok((curr, done));
+            }
+            if curr.is_none() {
+                break;
+            }
         }
 
         Ok((curr, false))
@@ -217,7 +235,7 @@ impl<T: Trace> Graph<T> {
         for node in &self.nodes {
             if let Some(reads) = &curr {
                 if let Some(first) = reads.first() {
-                     if !first.has_names(node.required_names()) {
+                    if !first.has_names(node.required_names()) {
                         return Ok((curr, true, false));
                     }
                 }

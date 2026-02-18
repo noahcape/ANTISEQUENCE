@@ -36,7 +36,7 @@ impl CutOp {
 impl<T: Trace> GraphNode<T> for CutOp {
     fn run_inner(&self, mut reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
         for read in &mut reads {
-            let cut_idx = self.cut_idx.eval_int(&read).map_err(|e| Error::NameError {
+            let cut_idx = self.cut_idx.eval_int(read).map_err(|e| Error::NameError {
                 source: e,
                 read: read.clone(),
                 context: Self::NAME,

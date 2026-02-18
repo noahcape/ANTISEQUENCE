@@ -166,7 +166,7 @@ impl GeneralSearcher {
                 Self::get_hashes(p, k, |curr_hashes, len, pattern_i| {
                     hashes.extend(
                         curr_hashes[..len]
-                            .into_iter()
+                            .iter()
                             .enumerate()
                             .map(|(i, &h)| (h, pattern_idx, pattern_i + i)),
                     );
@@ -197,6 +197,7 @@ impl GeneralSearcher {
 
         while i + Self::B <= s.len() {
             let mut hashes = [0u64; Self::B];
+            #[allow(clippy::needless_range_loop)]
             for j in 0..Self::B {
                 hashes[j] = hash;
                 hash = hash.rotate_left(1)
@@ -213,6 +214,7 @@ impl GeneralSearcher {
 
         if len > 0 {
             let mut hashes = [0u64; Self::B];
+            #[allow(clippy::needless_range_loop)]
             for j in 0..len {
                 hashes[j] = hash;
                 hash = hash.rotate_left(1)
@@ -244,7 +246,7 @@ struct HashToPatternIdx {
 
 impl HashToPatternIdx {
     pub fn new(mut hash_pattern_idxs: Vec<(u64, usize, usize)>) -> Self {
-        assert!(hash_pattern_idxs.len() <= std::u32::MAX as usize);
+        assert!(hash_pattern_idxs.len() <= u32::MAX as usize);
         hash_pattern_idxs.sort_unstable();
         let filter = Filter::new(hash_pattern_idxs.iter().map(|(h, _, _)| *h));
         let mut map = FxHashMap::default();
@@ -273,6 +275,7 @@ impl HashToPatternIdx {
     ) {
         let mut contains = 0u64;
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..N {
             if self.filter.contains(hashes[i]) {
                 contains |= 1 << i;

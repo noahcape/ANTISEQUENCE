@@ -89,7 +89,7 @@ fn parse(expr: &[u8]) -> Result<(Vec<Label>, Vec<Option<LabelOrAttr>>)> {
 
     let before = before_str
         .split(|&b| b == b',')
-        .map(|s| Label::new(s))
+        .map(Label::new)
         .collect::<Result<Vec<_>>>()?;
 
     let after = after_str
@@ -109,4 +109,58 @@ fn parse(expr: &[u8]) -> Result<(Vec<Label>, Vec<Option<LabelOrAttr>>)> {
         .collect::<Result<Vec<_>>>()?;
 
     Ok((before, after))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_transform_expr_from_bytes() {
+        let te = TransformExpr::from_bytes("seq1.a -> seq1.b").unwrap();
+        let b = te.before(0);
+        assert_eq!(b.label, crate::inline_string::InlineString::new(b"a"));
+        let a = te.after_label(0, "test");
+        assert!(a.is_some());
+    }
+
+    #[test]
+    fn test_transform_expr_multiple() {
+        let te = TransformExpr::from_bytes("seq1.a, seq1.b -> seq1.c, seq1.d").unwrap();
+        te.check_size(2, 2, "test");
+    }
+
+    #[test]
+    fn test_transform_expr_discard() {
+        let te = TransformExpr::from_bytes("seq1.a -> _").unwrap();
+        let a = te.after_label(0, "test");
+        assert!(a.is_none());
+    }
+
+    #[test]
+    fn test_transform_expr_with_attr() {
+        let te = TransformExpr::from_bytes("seq1.a -> seq1.b.attr").unwrap();
+        let a = te.after_attr(0, "test");
+        assert!(a.is_some());
+    }
+
+    #[test]
+    fn test_transform_expr_missing_arrow() {
+        let result = TransformExpr::from_bytes("seq1.a seq1.b");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_check_same_str_type() {
+        let te = TransformExpr::from_bytes("seq1.a, seq1.b -> seq1.c, seq1.d").unwrap();
+        te.check_same_str_type("test");
+    }
+
+    #[test]
+    fn test_transform_new() {
+        let before = vec![Label::new(b"seq1.a").unwrap()];
+        let after = vec![Some(LabelOrAttr::Label(Label::new(b"seq1.b").unwrap()))];
+        let te = TransformExpr::new(before, after);
+        te.check_size(1, 1, "test");
+    }
 }
