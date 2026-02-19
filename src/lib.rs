@@ -886,6 +886,61 @@ mod pipeline_tests {
         assert_eq!(counter.counts()[0], 1);
     }
 
+    // -- Regression: HammingLookup overflow for patterns > 8 bytes --
+    // These tests exercise MatchAnyOp::new construction with long patterns,
+    // which is the actual code path where the u64 encoding overflow occurred.
+
+    #[test]
+    fn test_graph_match_hamming_long_pattern_no_panic() {
+        // 14bp pattern exceeds HammingLookup u64 encoding limit (8 bytes).
+        // MatchAnyOp::new must skip the fast lookup and use the slow Hamming path.
+        // Previously panicked with "attempt to shift left with overflow".
+        let fq = fastq_bytes(&[("read1", "CATATTCCTGGTGG", "IIIIIIIIIIIIII")]);
+
+        let patterns = Patterns::from_strs(["CATATTCCTGGTGG"]);
+
+        let mut g = Graph::<NoTrace>::new();
+        g.add(InputFastqOp::from_reader(Cursor::new(fq)).unwrap());
+        g.add(MatchAnyOp::new(
+            te("seq1.* -> seq1.*"),
+            patterns,
+            Hamming(Count(12)),
+        ));
+        let counter = g.add(CountOp::new([true]));
+        g.run().unwrap();
+
+        assert_eq!(
+            counter.counts()[0],
+            1,
+            "14bp exact Hamming match should succeed"
+        );
+    }
+
+    #[test]
+    fn test_graph_match_hamming_long_pattern_with_mismatch() {
+        // 14bp pattern with 2 mismatches, threshold allows 2.
+        // Exercises the slow Hamming fallback path for long patterns.
+        let fq = fastq_bytes(&[("read1", "CATATTCCTGGNGG", "IIIIIIIIIIIIII")]);
+
+        let patterns = Patterns::from_strs(["CATATTCCTGGTGG"]);
+
+        let mut g = Graph::<NoTrace>::new();
+        g.add(InputFastqOp::from_reader(Cursor::new(fq)).unwrap());
+        g.add(MatchAnyOp::new(
+            te("seq1.* -> seq1.*"),
+            patterns,
+            Hamming(Count(12)),
+        ));
+        let counter = g.add(CountOp::new([true]));
+        g.run().unwrap();
+
+        assert_eq!(
+            counter.counts()[0],
+            1,
+            "14bp Hamming match with 1 mismatch should succeed"
+        );
+    }
+
     #[test]
     fn test_graph_match_edit_full() {
         let fq = fastq_bytes(&[("read1", "ACG", "III")]);

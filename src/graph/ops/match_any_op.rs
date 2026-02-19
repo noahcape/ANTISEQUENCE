@@ -18,19 +18,35 @@ use crate::Patterns;
 
 /// Pre-computed lookup table for fast Hamming matching.
 /// Stores substitution IDs as InlineString (Copy, stack-allocated) to avoid allocation.
+///
+/// Limitations:
+/// - Pattern length must be <= 8 bytes (encoded as u64).
+/// - Mismatch variants only substitute {A, C, G, T}. Sequences containing
+///   non-ACGT characters (e.g. N) will not generate all mismatch neighbors,
+///   so the lookup may produce false negatives for such inputs. The slow
+///   Hamming path handles all byte values correctly.
 struct HammingLookup {
     /// Maps encoded sequence -> substitution_id as InlineString (Copy type)
     table: FxHashMap<u64, InlineString>,
-    /// Pattern length (all patterns must be same length)
+    /// Pattern length (all patterns must be same length, <= 8)
     pattern_len: usize,
 }
 
 impl HammingLookup {
+    /// Only ACGT bases are used for mismatch variant generation.
+    /// Non-ACGT characters in input sequences may cause false negatives
+    /// in the fast lookup path (the slow Hamming fallback handles all bytes).
     const NUCLEOTIDES: [u8; 4] = [b'A', b'C', b'G', b'T'];
 
-    /// Encode a sequence as u64 (up to 8 bytes)
+    /// Encode a sequence as u64 (up to 8 bytes).
+    /// Panics in debug builds if seq.len() > 8.
     #[inline]
     fn encode(seq: &[u8]) -> u64 {
+        debug_assert!(
+            seq.len() <= 8,
+            "HammingLookup::encode called with {} bytes (max 8)",
+            seq.len()
+        );
         let mut key = 0u64;
         for (i, &b) in seq.iter().enumerate() {
             key |= (b as u64) << (i * 8);
@@ -2015,7 +2031,7 @@ mod edit_distance_tests {
         assert_eq!(start, 4, "should start at position 4");
     }
 
-    // -- Regression: HammingLookup::encode overflow for patterns > 8 bytes --
+    // -- Regression: HammingLookup::encode --
     #[test]
     fn test_hamming_lookup_encode_short_sequence() {
         // Sequences up to 8 bytes should encode without panic
@@ -2028,12 +2044,11 @@ mod edit_distance_tests {
     }
 
     #[test]
-    fn test_hamming_long_pattern_no_panic() {
-        // 14-byte pattern exceeds u64 encoding limit (8 bytes).
-        // This must not panic -- the regular hamming() fallback should handle it.
-        let text = b"CATATTCCTGGTGG";
-        let pattern = b"CATATTCCTGGTGG";
-        let result = hamming(text, pattern, 14);
-        assert_eq!(result, Some(14), "exact match on 14-byte pattern");
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "max 8")]
+    fn test_hamming_lookup_encode_rejects_long_sequence() {
+        // Sequences > 8 bytes must panic in debug builds (debug_assert guard)
+        let seq = b"CATATTCCTGGTGG"; // 14 bytes
+        let _ = HammingLookup::encode(seq);
     }
 }
