@@ -175,8 +175,9 @@ impl MatchAnyOp {
 
         // Build fast hash-based lookup for Hamming matching when:
         // 1. All patterns are literals of the same length
-        // 2. Match type is Hamming with small mismatch count (≤2)
-        // 3. Pattern count is reasonable (≤1000)
+        // 2. Match type is Hamming with small mismatch count (<=2)
+        // 3. Pattern count is reasonable (<=1000)
+        // 4. Pattern length fits in u64 encoding (<=8 bytes)
         let hamming_lookup = if let MatchType::Hamming(threshold) = match_type {
             let max_mismatches = max_literal_len.saturating_sub(threshold.get(max_literal_len));
             let pattern_count = patterns.iter_literals().count();
@@ -186,6 +187,7 @@ impl MatchAnyOp {
                 && max_mismatches <= 2
                 && pattern_count <= 1000
                 && max_literal_len > 0
+                && max_literal_len <= 8
             {
                 // Extract substitution IDs from pattern attributes as InlineStrings
                 let sub_ids: Vec<InlineString> = patterns
@@ -2011,5 +2013,27 @@ mod edit_distance_tests {
         let (matches, start) = result.unwrap();
         assert_eq!(matches, 3, "should report 3 matches (1 edit)");
         assert_eq!(start, 4, "should start at position 4");
+    }
+
+    // -- Regression: HammingLookup::encode overflow for patterns > 8 bytes --
+    #[test]
+    fn test_hamming_lookup_encode_short_sequence() {
+        // Sequences up to 8 bytes should encode without panic
+        let seq = b"ACGTACGT";
+        let encoded = HammingLookup::encode(seq);
+        assert_ne!(
+            encoded, 0,
+            "8-byte sequence should produce non-zero encoding"
+        );
+    }
+
+    #[test]
+    fn test_hamming_long_pattern_no_panic() {
+        // 14-byte pattern exceeds u64 encoding limit (8 bytes).
+        // This must not panic -- the regular hamming() fallback should handle it.
+        let text = b"CATATTCCTGGTGG";
+        let pattern = b"CATATTCCTGGTGG";
+        let result = hamming(text, pattern, 14);
+        assert_eq!(result, Some(14), "exact match on 14-byte pattern");
     }
 }
