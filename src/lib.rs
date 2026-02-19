@@ -119,6 +119,7 @@ pub use crate::read::*;
 mod pipeline_tests {
     use crate::expr::*;
     use crate::graph::*;
+    use crate::inline_string::InlineString;
     use crate::patterns::Patterns;
     use crate::read::*;
     use crate::trace::NoTrace;
@@ -1522,5 +1523,296 @@ mod pipeline_tests {
         g.run().unwrap();
 
         assert_eq!(counter.counts()[0], 1);
+    }
+
+    // ---- TryOrientationOp tests ----
+
+    /// Helper: build an inner graph that retains only reads whose seq1 starts
+    /// with the given prefix (exact match on the first N bytes).
+    fn orientation_inner_graph(prefix: &str) -> Graph<NoTrace> {
+        let prefix_len = prefix.len();
+        let retain_expr = Expr::from(label("seq1.*"))
+            .slice(..prefix_len)
+            .eq(Expr::from(prefix.as_bytes().to_vec()));
+        let mut g = Graph::<NoTrace>::new();
+        g.add(RetainOp::new(retain_expr));
+        g
+    }
+
+    #[test]
+    fn test_try_orientation_forward_only() {
+        // Read starts with ACGT (forward match) -- should succeed on first pass.
+        let fq = fastq_bytes(&[("read1", "ACGTNNNN", "IIIIIIII")]);
+
+        let inner = orientation_inner_graph("ACGT");
+
+        let mut g = Graph::<NoTrace>::new();
+        g.add(InputFastqOp::from_reader(Cursor::new(fq)).unwrap());
+        g.add(TryOrientationOp::new(inner, 1, b"ori"));
+        let counter = g.add(CountOp::new([true]));
+        g.run().unwrap();
+
+        assert_eq!(counter.counts()[0], 1);
+    }
+
+    #[test]
+    fn test_try_orientation_rc_only() {
+        // Read is RC of "ACGTNNNN" = "NNNNACGT" (RC) -> after RC by TryOrientationOp
+        // it becomes "ACGTNNNN" which starts with ACGT.
+        // RC("NNNNACGT") = revcomp: reverse -> "TGCANNNN", complement -> "ACGTNNNN"
+        // Wait, let me compute carefully:
+        // Original: NNNNACGT, qual: 12345678
+        // Reverse:  TGCANNNN
+        // Complement of reversed: ACGTNNNN -- yes, starts with ACGT!
+        // Quality reversed: 87654321
+        let fq = fastq_bytes(&[("read1", "NNNNACGT", "12345678")]);
+
+        let inner = orientation_inner_graph("ACGT");
+
+        let mut g = Graph::<NoTrace>::new();
+        g.add(InputFastqOp::from_reader(Cursor::new(fq)).unwrap());
+        g.add(TryOrientationOp::new(inner, 1, b"ori"));
+        let counter = g.add(CountOp::new([true]));
+        g.run().unwrap();
+
+        assert_eq!(counter.counts()[0], 1);
+    }
+
+    #[test]
+    fn test_try_orientation_both_fail() {
+        // Read "TTTTTTTT" -- forward doesn't start with ACGT,
+        // RC("TTTTTTTT") = "AAAAAAAA" -- also doesn't start with ACGT.
+        // Read should be dropped.
+        let fq = fastq_bytes(&[("read1", "TTTTTTTT", "IIIIIIII")]);
+
+        let inner = orientation_inner_graph("ACGT");
+
+        let mut g = Graph::<NoTrace>::new();
+        g.add(InputFastqOp::from_reader(Cursor::new(fq)).unwrap());
+        g.add(TryOrientationOp::new(inner, 1, b"ori"));
+        let counter = g.add(CountOp::new([true]));
+        g.run().unwrap();
+
+        assert_eq!(counter.counts()[0], 0);
+    }
+
+    #[test]
+    fn test_try_orientation_ori_attribute() {
+        // Two reads: one matches forward, one needs RC.
+        // Verify ori attribute is set correctly on each.
+        let fq = fastq_bytes(&[
+            ("fw_read", "ACGTNNNN", "IIIIIIII"),
+            ("rc_read", "NNNNACGT", "IIIIIIII"),
+        ]);
+
+        let inner = orientation_inner_graph("ACGT");
+
+        let mut g = Graph::<NoTrace>::new();
+        g.add(InputFastqOp::from_reader(Cursor::new(fq)).unwrap());
+        g.add(TryOrientationOp::new(inner, 1, b"ori"));
+
+        // Use ForEachOp to inspect each read's ori attribute.
+        let ori_values = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+        let ori_clone = ori_values.clone();
+        g.add(ForEachOp::new(move |read: &mut Read| {
+            if let Ok(Data::Bytes(v)) = read.data(
+                StrType::Seq(1),
+                InlineString::new(b"*"),
+                InlineString::new(b"ori"),
+            ) {
+                ori_clone.lock().unwrap().push(v.clone());
+            }
+        }));
+
+        g.run().unwrap();
+
+        let values = ori_values.lock().unwrap();
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0], b"fw");
+        assert_eq!(values[1], b"rc");
+    }
+
+    #[test]
+    fn test_try_orientation_forward_invariant() {
+        // Key invariant test (Section 4.1.1): present the same molecule in
+        // both fw and RC orientations. The extracted prefix should be
+        // identical (both "ACGT") because TryOrientationOp RCs the input
+        // before extraction.
+        let fq = fastq_bytes(&[
+            ("fw_read", "ACGTTTTT", "IIIIIIII"),
+            // RC of "ACGTTTTT": reverse="TTTTTGCA", complement="AAAAACGT"
+            ("rc_read", "AAAAACGT", "IIIIIIII"),
+        ]);
+
+        // Inner graph: retain reads starting with "ACGT", then cut out
+        // the first 4 bases as "barcode".
+        let retain_expr = Expr::from(label("seq1.*"))
+            .slice(..4)
+            .eq(Expr::from(b"ACGT".to_vec()));
+        let mut inner = Graph::<NoTrace>::new();
+        inner.add(RetainOp::new(retain_expr));
+        inner.add(CutOp::new(te("seq1.* -> seq1.barcode, seq1.rest"), 4isize));
+
+        let mut g = Graph::<NoTrace>::new();
+        g.add(InputFastqOp::from_reader(Cursor::new(fq)).unwrap());
+        g.add(TryOrientationOp::new(inner, 1, b"ori"));
+
+        // Collect barcode substrings from each read.
+        let barcodes = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+        let bc_clone = barcodes.clone();
+        g.add(ForEachOp::new(move |read: &mut Read| {
+            if let Ok(bc) = read.substring(StrType::Seq(1), InlineString::new(b"barcode")) {
+                bc_clone.lock().unwrap().push(bc.to_vec());
+            }
+        }));
+
+        g.run().unwrap();
+
+        let bc_vals = barcodes.lock().unwrap();
+        assert_eq!(bc_vals.len(), 2, "Both reads should survive");
+        assert_eq!(bc_vals[0], b"ACGT", "Forward read barcode");
+        assert_eq!(bc_vals[1], b"ACGT", "RC read barcode (should be identical)");
+    }
+
+    #[test]
+    fn test_try_orientation_mixed_batch() {
+        // Mixed batch: fw match, rc match, fail, fw match.
+        // Verify correct count, ordering, and per-read ori attributes.
+        let fq = fastq_bytes(&[
+            ("read_fw1", "ACGTAAAA", "IIIIIIII"),  // fw match
+            ("read_rc", "NNNNACGT", "IIIIIIII"),   // rc match (RC -> ACGTNNNN)
+            ("read_fail", "TTTTTTTT", "IIIIIIII"), // fail both
+            ("read_fw2", "ACGTCCCC", "IIIIIIII"),  // fw match
+        ]);
+
+        let inner = orientation_inner_graph("ACGT");
+
+        let mut g = Graph::<NoTrace>::new();
+        g.add(InputFastqOp::from_reader(Cursor::new(fq)).unwrap());
+        g.add(TryOrientationOp::new(inner, 1, b"ori"));
+
+        let results = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(String, Vec<u8>)>::new()));
+        let res_clone = results.clone();
+        g.add(ForEachOp::new(move |read: &mut Read| {
+            let name = read
+                .str_mappings(StrType::Name(1))
+                .map(|sm| String::from_utf8_lossy(sm.string()).to_string())
+                .unwrap_or_default();
+            let ori = read
+                .data(
+                    StrType::Seq(1),
+                    InlineString::new(b"*"),
+                    InlineString::new(b"ori"),
+                )
+                .ok()
+                .and_then(|d| {
+                    if let Data::Bytes(v) = d {
+                        Some(v.clone())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
+            res_clone.lock().unwrap().push((name, ori));
+        }));
+
+        g.run().unwrap();
+
+        let res = results.lock().unwrap();
+        // 3 survivors (read_fail dropped)
+        assert_eq!(res.len(), 3);
+
+        // Verify ordering preserved: fw1, rc, fw2
+        assert_eq!(res[0].0, "read_fw1");
+        assert_eq!(res[0].1, b"fw");
+
+        assert_eq!(res[1].0, "read_rc");
+        assert_eq!(res[1].1, b"rc");
+
+        assert_eq!(res[2].0, "read_fw2");
+        assert_eq!(res[2].1, b"fw");
+    }
+
+    #[test]
+    fn test_try_orientation_quality_reversed() {
+        // Verify quality scores are reversed (not complemented) during RC.
+        // Read "NNNNACGT" with qual "12345678"
+        // After RC: seq becomes "ACGTNNNN", qual becomes "87654321"
+        let fq = fastq_bytes(&[("read1", "NNNNACGT", "12345678")]);
+
+        // Inner graph: retain if starts with ACGT, then cut to get barcode
+        let retain_expr = Expr::from(label("seq1.*"))
+            .slice(..4)
+            .eq(Expr::from(b"ACGT".to_vec()));
+        let mut inner = Graph::<NoTrace>::new();
+        inner.add(RetainOp::new(retain_expr));
+        inner.add(CutOp::new(te("seq1.* -> seq1.barcode, seq1.rest"), 4isize));
+
+        let mut g = Graph::<NoTrace>::new();
+        g.add(InputFastqOp::from_reader(Cursor::new(fq)).unwrap());
+        g.add(TryOrientationOp::new(inner, 1, b"ori"));
+
+        let quals = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+        let q_clone = quals.clone();
+        g.add(ForEachOp::new(move |read: &mut Read| {
+            if let Ok(Some(q_bytes)) =
+                read.substring_qual(StrType::Seq(1), InlineString::new(b"barcode"))
+            {
+                q_clone.lock().unwrap().push(q_bytes.to_vec());
+            }
+        }));
+
+        g.run().unwrap();
+
+        let q_vals = quals.lock().unwrap();
+        assert_eq!(q_vals.len(), 1);
+        // Original qual "12345678" reversed = "87654321"
+        // Barcode is first 4 bases, so qual for barcode = "8765"
+        assert_eq!(q_vals[0], b"8765");
+    }
+
+    #[test]
+    fn test_try_orientation_batch_idx_not_leaked() {
+        // BUG 2: TryOrientationOp tags each read with an internal _batch_idx
+        // attribute for ordering, but never removes it after sorting. This
+        // leaks internal bookkeeping data into output reads.
+        //
+        // CORRECT: _batch_idx should be absent from all output reads.
+        let fq = fastq_bytes(&[
+            ("fw_read", "ACGTNNNN", "IIIIIIII"),
+            ("rc_read", "NNNNACGT", "IIIIIIII"),
+        ]);
+
+        let inner = orientation_inner_graph("ACGT");
+
+        let mut g = Graph::<NoTrace>::new();
+        g.add(InputFastqOp::from_reader(Cursor::new(fq)).unwrap());
+        g.add(TryOrientationOp::new(inner, 1, b"ori"));
+
+        let batch_idx_found = std::sync::Arc::new(std::sync::Mutex::new(Vec::<bool>::new()));
+        let found_clone = batch_idx_found.clone();
+        g.add(ForEachOp::new(move |read: &mut Read| {
+            let has_batch_idx = read
+                .data(
+                    StrType::Seq(1),
+                    InlineString::new(b"*"),
+                    InlineString::new(b"_batch_idx"),
+                )
+                .is_ok();
+            found_clone.lock().unwrap().push(has_batch_idx);
+        }));
+
+        g.run().unwrap();
+
+        let found = batch_idx_found.lock().unwrap();
+        assert_eq!(found.len(), 2, "Both reads should survive");
+        for (i, &has_it) in found.iter().enumerate() {
+            assert!(
+                !has_it,
+                "Output read {} still has _batch_idx attribute -- internal \
+                 bookkeeping data leaked into output",
+                i
+            );
+        }
     }
 }

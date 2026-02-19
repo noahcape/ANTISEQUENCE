@@ -126,8 +126,18 @@ impl StrMappings {
     }
 
     #[inline(always)]
+    pub fn string_mut(&mut self) -> &mut Vec<u8> {
+        &mut self.string
+    }
+
+    #[inline(always)]
     pub fn qual(&self) -> Option<&[u8]> {
         self.qual.as_deref()
+    }
+
+    #[inline(always)]
+    pub fn qual_mut(&mut self) -> Option<&mut Vec<u8>> {
+        self.qual.as_mut()
     }
 
     #[inline(always)]
@@ -635,6 +645,12 @@ impl Mapping {
             .get_or_insert_with(SmallAttrMap::default)
             .get_or_insert_default(attr)
     }
+
+    pub fn remove_data(&mut self, attr: &InlineString) {
+        if let Some(d) = &mut self.data {
+            d.remove(attr);
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -700,6 +716,14 @@ impl SmallAttrMap {
         self.map = Some(m);
         // Now safely insert and return from the map
         self.entry_in_map(attr)
+    }
+
+    fn remove(&mut self, attr: &InlineString) {
+        if let Some(m) = &mut self.map {
+            m.remove(attr);
+        } else {
+            self.small.retain(|(k, _)| k != attr);
+        }
     }
 
     fn for_each<F: FnMut(&InlineString, &Data)>(&self, mut f: F) {
@@ -1019,6 +1043,14 @@ impl Read {
             .mapping_mut(label)
             .ok_or(NameError::NotInRead(Name::Label(label)))?
             .data_mut(attr))
+    }
+
+    pub fn remove_data(&mut self, str_type: StrType, label: InlineString, attr: &InlineString) {
+        if let Some(sm) = self.str_mappings_mut(str_type) {
+            if let Some(m) = sm.mapping_mut(label) {
+                m.remove_data(attr);
+            }
+        }
     }
 
     #[inline(always)]

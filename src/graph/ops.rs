@@ -60,6 +60,9 @@ pub use select_op::*;
 mod try_op;
 pub use try_op::*;
 
+mod try_orientation_op;
+pub use try_orientation_op::*;
+
 mod while_op;
 pub use while_op::*;
 
