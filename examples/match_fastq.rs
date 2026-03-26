@@ -1,28 +1,23 @@
+use antisequence::expr::*;
+use antisequence::graph::*;
+use antisequence::trace::*;
 use antisequence::*;
 
 fn main() {
-    let patterns = r#"
-        name: adapter
-        patterns:
-            - pattern: "AAAA"
-            - pattern: "TTTT"
-    "#;
-
-    iter_fastq1("example_data/match.fastq", 256)
-        .unwrap_or_else(|e| panic!("{e}"))
-        .match_any(
-            sel!(),
-            tr!(seq1.* -> seq1.template, seq1.adapter),
-            patterns,
-            SuffixAln {
-                identity: 0.75,
-                overlap: 0.5,
-            },
-        )
-        .dbg(sel!())
-        .trim(sel!(seq1.adapter), [label!(seq1.adapter)])
-        .dbg(sel!())
-        .collect_fastq1(sel!(), "example_output/match.fastq")
-        .run()
-        .unwrap_or_else(|e| panic!("{e}"));
+    let mut g = Graph::<TraceReads>::new();
+    g.add(InputFastqOp::from_file("example_data/match.fastq").unwrap_or_else(|e| panic!("{e}")));
+    let patterns = Patterns::from_strs(["AAAA", "TTTT"]);
+    g.add(MatchAnyOp::new(
+        tr!(seq1.* -> seq1.template, seq1.adapter),
+        patterns,
+        SuffixAln {
+            identity: 0.75,
+            overlap: 0.5,
+        },
+    ));
+    g.add(DbgOp::create());
+    g.add(TrimOp::new([label("seq1.adapter")]));
+    g.add(DbgOp::create());
+    g.add(OutputFastqFileOp::from_file("example_output/match.fastq"));
+    g.run().unwrap_or_else(|e| panic!("{e}"));
 }

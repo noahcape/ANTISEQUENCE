@@ -1,16 +1,18 @@
+use antisequence::expr::*;
+use antisequence::graph::*;
 use antisequence::*;
 
 fn main() {
-    let (left, right) = iter_fastq1("example_data/simple.fastq", 1)
-        .unwrap_or_else(|e| panic!("{e}"))
-        .cut(sel!(), tr!(seq1.* -> seq1.a, seq1.b), LeftEnd(3))
-        .fork();
+    let mut g = <Graph>::new();
+    g.add(InputFastqOp::from_file("example_data/simple.fastq").unwrap_or_else(|e| panic!("{e}")));
+    g.add(CutOp::new(tr!(seq1.* -> seq1.a, seq1.b), 3));
 
-    let left = left
-        .set(sel!(), label!(name1.*), "{name1.*}_{seq1.a}")
-        .dbg(sel!());
+    let mut fork = <Graph>::new();
+    fork.add(SetOp::new(label("name1.*"), fmt_expr("{name1.*}_{seq1.a}")));
+    fork.add(DbgOp::create());
+    g.add(ForkOp::new(fork));
 
-    let right = right.trim(sel!(), [label!(seq1.a)]).dbg(sel!());
-
-    run!(left, right);
+    g.add(TrimOp::new([label("seq1.a")]));
+    g.add(DbgOp::create());
+    g.run().unwrap_or_else(|e| panic!("{e}"));
 }

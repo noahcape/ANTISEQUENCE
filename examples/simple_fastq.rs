@@ -1,15 +1,17 @@
+use antisequence::expr::*;
+use antisequence::graph::*;
 use antisequence::*;
 
 fn main() {
-    iter_fastq1("example_data/simple.fastq", 256)
-        .unwrap_or_else(|e| panic!("{e}"))
-        .cut(sel!(), tr!(seq1.* -> seq1.a, seq1.b), LeftEnd(3))
-        .cut(sel!(), tr!(seq1.b -> _, seq1.c), RightEnd(4))
-        .dbg(sel!())
-        .set(sel!(), label!(name1.*), "{name1.*}_{seq1.a}")
-        .trim(sel!(), [label!(seq1.a)])
-        .dbg(sel!())
-        .collect_fastq1(sel!(), "example_output/simple.fastq")
-        .run()
-        .unwrap_or_else(|e| panic!("{e}"));
+    let mut g = <Graph>::new();
+    g.add(InputFastqOp::from_file("example_data/simple.fastq").unwrap_or_else(|e| panic!("{e}")));
+    g.add(CutOp::new(tr!(seq1.* -> seq1.a, seq1.b), 3));
+    g.add(CutOp::new(tr!(seq1.b -> _, seq1.b), -4));
+    g.add(DbgOp::create());
+    g.add(SetOp::new(label("name1.*"), fmt_expr("{name1.*}_{seq1.a}")));
+    g.add(TrimOp::new([label("seq1.a")]));
+    g.add(DbgOp::create());
+    g.add(OutputFastqFileOp::from_file("example_output/simple.fastq"));
+    g.add(OutputJsonOp::from_file("example_output/simple.json").unwrap_or_else(|e| panic!("{e}")));
+    g.run().unwrap_or_else(|e| panic!("{e}"));
 }

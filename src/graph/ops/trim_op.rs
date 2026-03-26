@@ -1,0 +1,48 @@
+use crate::graph::*;
+
+pub struct TrimOp {
+    required_names: Vec<LabelOrAttr>,
+    labels: Vec<Label>,
+}
+
+impl TrimOp {
+    const NAME: &'static str = "TrimOp";
+
+    /// Trim the intervals of the specified labels by splicing them out of the underlying strings.
+    ///
+    /// When an interval is trimmed, its length will be set to zero. All intersecting
+    /// intervals will also be adjusted accordingly for the shortening.
+    pub fn new(labels: impl IntoIterator<Item = Label>) -> Self {
+        let labels = labels.into_iter().collect::<Vec<_>>();
+
+        Self {
+            required_names: labels.iter().cloned().map(|l| l.into()).collect(),
+            labels,
+        }
+    }
+}
+
+impl<T: Trace> GraphNode<T> for TrimOp {
+    fn run_inner(&self, mut reads: Vec<Read>) -> Result<(Option<Vec<Read>>, bool)> {
+        for read in &mut reads {
+            self.labels
+                .iter()
+                .try_for_each(|l| read.trim(l.str_type, l.label))
+                .map_err(|e| Error::NameError {
+                    source: e,
+                    read: read.clone(),
+                    context: Self::NAME,
+                })?;
+        }
+
+        Ok((Some(reads), false))
+    }
+
+    fn required_names(&self) -> &[LabelOrAttr] {
+        &self.required_names
+    }
+
+    fn name(&self) -> &'static str {
+        Self::NAME
+    }
+}

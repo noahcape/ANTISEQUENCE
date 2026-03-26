@@ -1,5 +1,5 @@
 use crate::errors::*;
-use crate::expr::{Label, LabelOrAttr};
+use crate::expr::{Attr, Label, LabelOrAttr};
 use crate::parse_utils::*;
 
 #[derive(Debug, Clone)]
@@ -9,8 +9,19 @@ pub struct TransformExpr {
 }
 
 impl TransformExpr {
-    pub fn new(expr: &[u8]) -> Result<Self> {
-        let (before, after) = parse(expr)?;
+    pub fn new(
+        before: impl IntoIterator<Item = Label>,
+        after: impl IntoIterator<Item = Option<LabelOrAttr>>,
+    ) -> Self {
+        Self {
+            before: before.into_iter().collect(),
+            after: after.into_iter().collect(),
+        }
+    }
+
+    /// Parse a byte string to get a transform expression.
+    pub fn from_bytes(expr: impl AsRef<[u8]>) -> Result<Self> {
+        let (before, after) = parse(expr.as_ref())?;
         Ok(Self { before, after })
     }
 
@@ -43,12 +54,24 @@ impl TransformExpr {
         );
     }
 
-    pub fn before(&self) -> &[Label] {
-        &self.before
+    pub fn before(&self, i: usize) -> Label {
+        self.before[i].clone()
     }
 
-    pub fn after(&self) -> &[Option<LabelOrAttr>] {
-        &self.after
+    pub fn after_label(&self, i: usize, context: &'static str) -> Option<Label> {
+        self.after[i].clone().map(|a| if let LabelOrAttr::Label(l) = a {
+            l
+        } else {
+            panic!("Expected type.label after the \"->\" in the transform expression for {context}")
+        })
+    }
+
+    pub fn after_attr(&self, i: usize, context: &'static str) -> Option<Attr> {
+        self.after[i].clone().map(|a| if let LabelOrAttr::Attr(a) = a {
+            a
+        } else {
+            panic!("Expected type.label.attr after the \"->\" in the transform expression for {context}")
+        })
     }
 }
 
@@ -66,7 +89,7 @@ fn parse(expr: &[u8]) -> Result<(Vec<Label>, Vec<Option<LabelOrAttr>>)> {
 
     let before = before_str
         .split(|&b| b == b',')
-        .map(|s| Label::new(s))
+        .map(Label::new)
         .collect::<Result<Vec<_>>>()?;
 
     let after = after_str
@@ -86,4 +109,58 @@ fn parse(expr: &[u8]) -> Result<(Vec<Label>, Vec<Option<LabelOrAttr>>)> {
         .collect::<Result<Vec<_>>>()?;
 
     Ok((before, after))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_transform_expr_from_bytes() {
+        let te = TransformExpr::from_bytes("seq1.a -> seq1.b").unwrap();
+        let b = te.before(0);
+        assert_eq!(b.label, crate::inline_string::InlineString::new(b"a"));
+        let a = te.after_label(0, "test");
+        assert!(a.is_some());
+    }
+
+    #[test]
+    fn test_transform_expr_multiple() {
+        let te = TransformExpr::from_bytes("seq1.a, seq1.b -> seq1.c, seq1.d").unwrap();
+        te.check_size(2, 2, "test");
+    }
+
+    #[test]
+    fn test_transform_expr_discard() {
+        let te = TransformExpr::from_bytes("seq1.a -> _").unwrap();
+        let a = te.after_label(0, "test");
+        assert!(a.is_none());
+    }
+
+    #[test]
+    fn test_transform_expr_with_attr() {
+        let te = TransformExpr::from_bytes("seq1.a -> seq1.b.attr").unwrap();
+        let a = te.after_attr(0, "test");
+        assert!(a.is_some());
+    }
+
+    #[test]
+    fn test_transform_expr_missing_arrow() {
+        let result = TransformExpr::from_bytes("seq1.a seq1.b");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_check_same_str_type() {
+        let te = TransformExpr::from_bytes("seq1.a, seq1.b -> seq1.c, seq1.d").unwrap();
+        te.check_same_str_type("test");
+    }
+
+    #[test]
+    fn test_transform_new() {
+        let before = vec![Label::new(b"seq1.a").unwrap()];
+        let after = vec![Some(LabelOrAttr::Label(Label::new(b"seq1.b").unwrap()))];
+        let te = TransformExpr::new(before, after);
+        te.check_size(1, 1, "test");
+    }
 }

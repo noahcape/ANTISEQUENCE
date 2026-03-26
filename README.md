@@ -1,15 +1,14 @@
 # ANTISEQUENCE
-Rust library for processing sequencing reads.
-
-*Work in progress! Very early stages of the project.*
+Rust stream processing library for sequencing reads.
 
 ## Goals
 * Robust, flexible, and actually universal primitives for manipulating raw DNA/RNA sequences from fastq files
-* Blazing fast and scalable implementation using SIMD and CPU parallelization
-* Simple interface allowing anyone (even non-Rustaceans) to pick up and use
+* Parse complex read structures from novel sequencing protocols
+* Easily define graphs of read processing operations
+* Blazing fast and scalable implementation using SIMD parallelism and multithreading
 * Extensible with custom Rust code and embeddable into existing pipelines
 
-ANTISEQUENCE should enable you to build robust, efficient, and production-ready pipeline for your custom sequencing data.
+ANTISEQUENCE should enable you to build robust, efficient, and production-ready pipelines for your raw sequencing data.
 
-## K-pop song
-Enjoy a K-pop [song](https://youtu.be/pyf8cbqyfPs).
+## Name
+The name of this library is inspired by a K-pop [song](https://youtu.be/pyf8cbqyfPs).

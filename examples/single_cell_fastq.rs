@@ -1,3 +1,5 @@
+use antisequence::expr::*;
+use antisequence::graph::*;
 use antisequence::*;
 
 fn main() {
@@ -14,71 +16,80 @@ AAAATTTTCCCCGGGGAAAACGCGACG
 +
 012345678901234567890123456
 @read2/1
-AAAAAAAAAAAAAACAGAGCTTTTTTTTCCCCCCCCCC
+AAAAAAAAACAGAGCTTTTTTTTCCCCCCCCCC
 +
-01234567890123456789012345678901234567
+012345678901234567890123456789012
 @read2/2
+AAAATTTTCCCCGGGGATATAT
++
+0123456789012345678901
+@read3/1
+CAGAGCAAAAAAAAAAAAAATTTTTTTTCCCCC
++
+012345678901234567890123456789012
+@read3/2
 AAAATTTTCCCCGGGGATATAT
 +
 0123456789012345678901";
 
-    let adapters = "
-        name: adapter
-        patterns:
-          - pattern: ATATATATAT
-          - pattern: CGCGCGCGCG
-    ";
+    let adapters = ["ATATATATAT", "CGCGCGCGCG"];
 
-    iter_fastq_interleaved_bytes(fastq)
-        .unwrap_or_else(|e| panic!("{e}"))
-        // trim adapter
-        .match_any(
-            sel!(),
-            tr!(seq2.* -> _, seq2.adapter),
-            adapters,
-            SuffixAln {
-                identity: 0.7,
-                overlap: 0.4,
-            },
-        )
-        .dbg(sel!())
-        .trim(sel!(seq2.adapter), [label!(seq2.adapter)])
-        // match anchor
-        .match_one(
-            sel!(),
-            tr!(seq1.* -> seq1.bc1, _, seq1.after_anchor),
-            "CAGAGC",
-            HammingSearch(Frac(0.8)),
-        )
-        // check the length of the first barcode
-        .length_in_bounds(sel!(seq1.bc1), tr!(seq1.bc1 -> seq1.bc1.in_bounds), 9..=11)
-        // split the UMI from the rest of the sequence
-        .cut(
-            sel!(seq1.after_anchor),
-            tr!(seq1.after_anchor -> seq1.umi, seq1.after_umi),
-            LeftEnd(8),
-        )
-        // clip the length of the second barcode
-        .cut(
-            sel!(seq1.after_umi),
-            tr!(seq1.after_umi -> seq1.bc2, _),
-            LeftEnd(10),
-        )
-        // check the length of the second barcode
-        .length_in_bounds(sel!(seq1.bc2), tr!(seq1.bc2 -> seq1.bc2.in_bounds), 10..=10)
-        .dbg(sel!())
-        // filter out invalid reads
-        .retain(sel!(
-            seq1.bc1 & seq1.bc1.in_bounds & seq1.bc2 & seq1.bc2.in_bounds
-        ))
-        // move the UMI and barcodes to the read name
-        .set(
-            sel!(),
-            label!(name1.*),
-            "{name1.*}_{seq1.umi}_{seq1.bc1}{seq1.bc2}",
-        )
-        .set(sel!(), label!(seq1.*), "{seq2.*}")
-        .collect_fastq1(sel!(), "example_output/single_cell.fastq")
-        .run()
-        .unwrap_or_else(|e| panic!("{e}"));
+    let mut g = <Graph>::new();
+    g.add(
+        InputFastqOp::from_interleaved_reader(fastq.as_slice(), 2)
+            .unwrap_or_else(|e| panic!("{e}")),
+    );
+
+    // trim adapter
+    g.add(MatchAnyOp::new(
+        tr!(seq2.* -> _, seq2.adapter),
+        Patterns::from_strs(adapters),
+        SuffixAln {
+            identity: 0.7,
+            overlap: 0.4,
+        },
+    ));
+    g.add(DbgOp::create());
+    g.add(TrimOp::new([label("seq2.adapter")]));
+
+    // match anchor
+    g.add(MatchAnyOp::new(
+        tr!(seq1.* -> seq1.bc1, _, seq1._after_anchor),
+        Patterns::from_strs(["CAGAGC"]),
+        HammingBoundedMatch {
+            threshold: Frac(0.8),
+            from: 9,
+            to: 17,
+        },
+    ));
+
+    // split the UMI from the rest of the sequence
+    g.add(CutOp::new(
+        tr!(seq1._after_anchor -> seq1.umi, seq1._after_umi),
+        8,
+    ));
+
+    // clip the length of the second barcode
+    g.add(CutOp::new(tr!(seq1._after_umi -> seq1.bc2, _), 10));
+    g.add(DbgOp::create());
+
+    // filter out invalid reads
+    g.add(RetainOp::new(
+        label_exists("seq1.bc1")
+            .and(label_exists("seq1.bc2"))
+            .and(Expr::from(label("seq1.bc1")).len().in_bounds(9..=11))
+            .and(Expr::from(label("seq1.bc2")).len().eq(10)),
+    ));
+
+    // move the UMI and barcodes to the read name
+    g.add(SetOp::new(
+        label("name1.*"),
+        fmt_expr("{name1.*}_{seq1.umi}_{seq1.bc1}{seq1.bc2}"),
+    ));
+    g.add(SetOp::new(label("seq1.*"), label("seq2.*")));
+
+    g.add(OutputFastqFileOp::from_file(
+        "example_output/single_cell.fastq",
+    ));
+    g.run().unwrap_or_else(|e| panic!("{e}"));
 }

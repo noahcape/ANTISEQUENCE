@@ -1,11 +1,8 @@
-pub mod selector;
-pub use selector::*;
-
-pub mod format;
-pub use format::*;
-
-pub mod transform;
+mod transform;
 pub use transform::*;
+
+mod expr_node;
+pub use expr_node::*;
 
 use crate::errors::*;
 use crate::inline_string::*;
@@ -151,50 +148,128 @@ impl From<Attr> for LabelOrAttr {
     }
 }
 
-/// Create a selector expression.
-#[macro_export]
-macro_rules! sel {
-    ($($t:tt)*) => {
-        {
-            let s = stringify!($($t)*);
-            $crate::expr::SelectorExpr::new(s.as_bytes())
-                .unwrap_or_else(|e| panic!("Error constructing selector expression:\n{e}\non line {} column {} in file {}", line!(), column!(), file!()))
-        }
-    };
-}
-
 /// Create a transform expression.
 #[macro_export]
 macro_rules! tr {
     ($($t:tt)+) => {
         {
             let s = stringify!($($t)+);
-            $crate::expr::TransformExpr::new(s.as_bytes())
+            $crate::expr::TransformExpr::from_bytes(s.as_bytes())
                 .unwrap_or_else(|e| panic!("Error constructing transform expression:\n{e}\non line {} column {} in file {}", line!(), column!(), file!()))
         }
     };
 }
 
-/// Create a label.
-#[macro_export]
-macro_rules! label {
-    ($($t:tt)+) => {
-        {
-            let s = stringify!($($t)+);
-            $crate::expr::Label::new(s.as_bytes())
-                .unwrap_or_else(|e| panic!("Error constructing label:\n{e}\non line {} column {} in file {}", line!(), column!(), file!()))
-        }
-    };
+/// Create a label by parsing a byte string of the form `type.label`.
+pub fn label(s: impl AsRef<[u8]>) -> Label {
+    Label::new(s.as_ref()).unwrap_or_else(|e| panic!("Error creating label:\n{e}"))
 }
 
-/// Create an attribute.
-#[macro_export]
-macro_rules! attr {
-    ($($t:tt)+) => {
-        {
-            let s = stringify!($($t)+);
-            $crate::expr::Attr::new(s.as_bytes())
-                .unwrap_or_else(|e| panic!("Error constructing attr:\n{e}\non line {} column {} in file {}", line!(), column!(), file!()))
-        }
-    };
+/// Create an attribute by parsing a byte string of the form `type.label.attr`.
+pub fn attr(s: impl AsRef<[u8]>) -> Attr {
+    Attr::new(s.as_ref()).unwrap_or_else(|e| panic!("Error creating attr:\n{e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_label_new_valid() {
+        let l = Label::new(b"seq1.test").unwrap();
+        assert_eq!(l.str_type, StrType::Seq(1));
+        assert_eq!(l.label, InlineString::new(b"test"));
+    }
+
+    #[test]
+    fn test_label_new_star() {
+        let l = Label::new(b"seq1.*").unwrap();
+        assert_eq!(l.label, InlineString::new(b"*"));
+    }
+
+    #[test]
+    fn test_label_new_name_type() {
+        let l = Label::new(b"name1.readname").unwrap();
+        assert_eq!(l.str_type, StrType::Name(1));
+    }
+
+    #[test]
+    fn test_label_new_invalid_format() {
+        assert!(Label::new(b"notype").is_err());
+        assert!(Label::new(b"too.many.parts").is_err());
+    }
+
+    #[test]
+    fn test_label_new_invalid_str_type() {
+        assert!(Label::new(b"invalid.label").is_err());
+    }
+
+    #[test]
+    fn test_label_new_with_whitespace() {
+        let l = Label::new(b" seq1 . test ").unwrap();
+        assert_eq!(l.str_type, StrType::Seq(1));
+        assert_eq!(l.label, InlineString::new(b"test"));
+    }
+
+    #[test]
+    fn test_attr_new_valid() {
+        let a = Attr::new(b"seq1.label.attr").unwrap();
+        assert_eq!(a.str_type, StrType::Seq(1));
+        assert_eq!(a.label, InlineString::new(b"label"));
+        assert_eq!(a.attr, InlineString::new(b"attr"));
+    }
+
+    #[test]
+    fn test_attr_new_invalid() {
+        assert!(Attr::new(b"seq1.label").is_err());
+        assert!(Attr::new(b"notype").is_err());
+    }
+
+    #[test]
+    fn test_label_or_attr_label() {
+        let la = LabelOrAttr::new(b"seq1.test").unwrap();
+        assert!(matches!(la, LabelOrAttr::Label(_)));
+        assert_eq!(la.str_type(), StrType::Seq(1));
+        assert_eq!(la.label(), InlineString::new(b"test"));
+    }
+
+    #[test]
+    fn test_label_or_attr_attr() {
+        let la = LabelOrAttr::new(b"seq1.label.attr").unwrap();
+        assert!(matches!(la, LabelOrAttr::Attr(_)));
+        assert_eq!(la.str_type(), StrType::Seq(1));
+        assert_eq!(la.label(), InlineString::new(b"label"));
+    }
+
+    #[test]
+    fn test_label_or_attr_invalid() {
+        assert!(LabelOrAttr::new(b"notype").is_err());
+        assert!(LabelOrAttr::new(b"a.b.c.d").is_err());
+    }
+
+    #[test]
+    fn test_label_or_attr_from_label() {
+        let l = Label::new(b"seq1.test").unwrap();
+        let la: LabelOrAttr = l.into();
+        assert!(matches!(la, LabelOrAttr::Label(_)));
+    }
+
+    #[test]
+    fn test_label_or_attr_from_attr() {
+        let a = Attr::new(b"seq1.label.attr").unwrap();
+        let la: LabelOrAttr = a.into();
+        assert!(matches!(la, LabelOrAttr::Attr(_)));
+    }
+
+    #[test]
+    fn test_label_helper() {
+        let l = label("seq1.test");
+        assert_eq!(l.str_type, StrType::Seq(1));
+    }
+
+    #[test]
+    fn test_attr_helper() {
+        let a = attr("seq1.label.attr");
+        assert_eq!(a.str_type, StrType::Seq(1));
+    }
 }

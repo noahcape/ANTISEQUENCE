@@ -2,9 +2,8 @@ use thiserror;
 
 use std::fmt;
 
-use crate::fastq::Origin;
 use crate::inline_string::*;
-use crate::read::{Data, Read, StrType};
+use crate::read::{Data, Origin, Read, StrType};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -39,7 +38,7 @@ pub enum Error {
     #[error("Could not parse \"{string}\" in \"{context}\". Names must contain one or more alphanumeric characters, '_', or '*'.")]
     InvalidName { string: String, context: String },
 
-    #[error("{source}\nwith read:\n{read}when {context}")]
+    #[error("{source}\nwith read:\n{read}for {context}")]
     NameError {
         source: NameError,
         read: Read,
@@ -57,10 +56,10 @@ pub enum Error {
 pub enum NameError {
     #[error("Name not found in read: {0}")]
     NotInRead(Name),
-    #[error("Duplicate name in read: {0}")]
-    Duplicate(Name),
     #[error("Expected {0}, but found {1:?}")]
-    Type(&'static str, Data),
+    Type(&'static str, Vec<Data>),
+    #[error("Expression error: {0}")]
+    Other(&'static str),
 }
 
 #[derive(Debug)]
